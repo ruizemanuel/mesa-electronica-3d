@@ -47,6 +47,8 @@ export interface World {
   camera: THREE.PerspectiveCamera;
   controls: OrbitControls;
   lampLight: THREE.PointLight;
+  /** Cambia la resolución del mapa de sombras del sol (se regenera en el próximo cuadro). */
+  setShadowMapSize(size: number): void;
   goTo(view: CameraView): void;
   /** La vista ajustada a la proporción actual de la pantalla. */
   fit(view: CameraView): CameraView;
@@ -181,6 +183,12 @@ export function createWorld(container: HTMLElement, quality: Quality, opts: { pr
     camera,
     controls,
     lampLight,
+    setShadowMapSize(size: number) {
+      sun.shadow.mapSize.set(size, size);
+      sun.shadow.map?.dispose();
+      sun.shadow.map = null; // three.js lo vuelve a crear con el tamaño nuevo
+      renderer.shadowMap.needsUpdate = true;
+    },
     goTo,
     fit,
     tick(dt: number) {
@@ -196,30 +204,53 @@ export function createWorld(container: HTMLElement, quality: Quality, opts: { pr
   };
 }
 
+// los modelos van comprimidos con meshopt + WebP (tools/optimize_models.mjs)
+const gltfLoader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
+
+async function loadPlaced(pl: Placement, lite: boolean): Promise<THREE.Object3D> {
+  const gltf = await gltfLoader.loadAsync(`${import.meta.env.BASE_URL}models/${pl.id}${lite ? ".lite" : ""}.glb`);
+  const obj = gltf.scene;
+  obj.name = pl.id;
+  obj.position.set(...pl.pos);
+  obj.rotation.y = pl.rotY;
+  shadows(obj, true, true);
+  obj.traverse((o) => {
+    const m = (o as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined;
+    if (m && m.map) m.map.anisotropy = 8;
+  });
+  return obj;
+}
+
+/** Reemplaza en la escena los modelos que tienen versión liviana (sin recargar la página). */
+export async function swapToLiteModels(scene: THREE.Scene, objs: Map<string, THREE.Object3D>): Promise<void> {
+  for (const pl of SIMREADY_LAYOUT) {
+    const old = objs.get(pl.id);
+    if (!old || !LITE_MODELS.has(pl.id)) continue;
+    const lite = await loadPlaced(pl, true);
+    scene.add(lite);
+    scene.remove(old);
+    old.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh) return;
+      m.geometry.dispose();
+      for (const mat of Array.isArray(m.material) ? m.material : [m.material]) mat.dispose();
+    });
+    objs.set(pl.id, lite);
+  }
+}
+
 export async function loadSimReady(
   scene: THREE.Scene,
   quality: Quality,
   onProgress: (loaded: number, total: number, label: string) => void,
 ): Promise<Map<string, THREE.Object3D>> {
-  // los modelos van comprimidos con meshopt + WebP (tools/optimize_models.mjs)
-  const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
   const out = new Map<string, THREE.Object3D>();
   let done = 0;
   onProgress(0, SIMREADY_LAYOUT.length, "Cargando assets SimReady…");
   await Promise.all(
     SIMREADY_LAYOUT.map(async (pl) => {
       try {
-        const file = quality.lite && LITE_MODELS.has(pl.id) ? `${pl.id}.lite.glb` : `${pl.id}.glb`;
-        const gltf = await loader.loadAsync(`${import.meta.env.BASE_URL}models/${file}`);
-        const obj = gltf.scene;
-        obj.name = pl.id;
-        obj.position.set(...pl.pos);
-        obj.rotation.y = pl.rotY;
-        shadows(obj, true, true);
-        obj.traverse((o) => {
-          const m = (o as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined;
-          if (m && m.map) m.map.anisotropy = 8;
-        });
+        const obj = await loadPlaced(pl, quality.lite && LITE_MODELS.has(pl.id));
         scene.add(obj);
         out.set(pl.id, obj);
       } catch (e) {

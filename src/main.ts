@@ -7,7 +7,7 @@ import { Cable, Probe3D } from "./scene/leads";
 import { Picker, type PickHit } from "./scene/picker";
 import { Psu3D } from "./scene/psu3d";
 import { MM, shadows, std } from "./scene/util";
-import { BENCH_TOP, VIEWS, createWorld, loadSimReady } from "./scene/world";
+import { BENCH_TOP, VIEWS, createWorld, loadSimReady, swapToLiteModels } from "./scene/world";
 import { Bench, type ProbeColor, type ProbeTarget, type PsuPost } from "./sim/bench";
 import { netOfHole } from "./sim/circuits";
 import { DIAL_LABEL, type Jack } from "./sim/dmm";
@@ -16,7 +16,7 @@ import { colorBands, formatSI } from "./sim/resistor";
 import { Panel } from "./ui/panel";
 import { installCapture } from "./capture";
 import { IS_TOUCH, TAP } from "./input";
-import { AdaptiveResolution, ShadowInvalidator, detectQuality } from "./quality";
+import { AdaptiveResolution, QUALITY, ShadowInvalidator, detectQuality } from "./quality";
 
 const V3 = THREE.Vector3;
 const CAPTURE = new URLSearchParams(location.search).has("capture");
@@ -496,6 +496,7 @@ function computeHint(): string {
 }
 
 // ------------------------------------------------------------------ carga de assets
+let simready: Map<string, THREE.Object3D> | null = null;
 const loading = document.getElementById("loading")!;
 const bar = loading.querySelector<HTMLElement>(".bar i")!;
 const label = loading.querySelector<HTMLElement>(".label")!;
@@ -503,6 +504,7 @@ const assetsReady = loadSimReady(scene, quality, (n, total, id) => {
   bar.style.width = `${(n / total) * 100}%`;
   label.textContent = n < total ? `Cargando SimReady · ${id}` : "Listo";
 }).then((objs) => {
+  simready = objs;
   const lamp = objs.get("lamp_table_bedside_a01");
   lamp?.traverse((o) => {
     const m = (o as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined;
@@ -581,6 +583,17 @@ if (CAPTURE) {
     quality.minPixelRatio,
     Math.min(window.devicePixelRatio, quality.maxPixelRatio),
   );
+  // si ni en la resolución mínima anda fluido (equipo de gama baja que no se detectó al arrancar),
+  // pasa a la versión liviana sin recargar: mesa simplificada y sombras de 2048
+  adaptive.onStruggle = () => {
+    if (quality.lite || !simready || new URLSearchParams(location.search).get("calidad") === "alta") return;
+    Object.assign(quality, QUALITY.baja);
+    world.setShadowMapSize(quality.shadowMapSize);
+    adaptive.setMax(Math.min(window.devicePixelRatio, quality.maxPixelRatio));
+    void swapToLiteModels(scene, simready).then(() => shadowInvalidator.invalidate());
+    toast("El equipo iba lento: pasé a la <b>calidad liviana</b> (mesa simplificada y sombras más chicas). Para volver, entrá con <code>?calidad=alta</code>.", "info");
+  };
+  if (import.meta.env.DEV) Object.assign(window, { adaptive });
   let last = performance.now();
   const loop = (now: number) => {
     const raw = (now - last) / 1000;

@@ -15,17 +15,42 @@ export interface Quality {
 /** Modelos con versión liviana (ver tools/optimize_models.mjs). */
 export const LITE_MODELS = new Set(["furniture_workbench_standard_e01"]);
 
+/** Lo que el navegador informa del equipo. */
+export interface DeviceHints {
+  /** Pantalla táctil como puntero principal (celulares, tablets). */
+  touch: boolean;
+  /** Núcleos lógicos (navigator.hardwareConcurrency). */
+  cores?: number;
+  /** Memoria en GB (navigator.deviceMemory: solo Chromium, redondeada y con tope en 8). */
+  memoryGB?: number;
+}
+
+export function deviceHints(): DeviceHints {
+  const nav = typeof navigator === "object" ? (navigator as Navigator & { deviceMemory?: number }) : undefined;
+  return {
+    touch: typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches,
+    cores: nav?.hardwareConcurrency || undefined,
+    memoryGB: nav?.deviceMemory || undefined,
+  };
+}
+
+/** Equipo de gama baja según el navegador: 4 GB de memoria o menos, o 2 núcleos o menos. */
+export const isLowEnd = (h: DeviceHints): boolean => (h.memoryGB !== undefined && h.memoryGB <= 4) || (h.cores !== undefined && h.cores <= 2);
+
+export const QUALITY: Record<Tier, Quality> = {
+  baja: { tier: "baja", maxPixelRatio: 1.5, minPixelRatio: 1, shadowMapSize: 2048, lite: true },
+  alta: { tier: "alta", maxPixelRatio: 2, minPixelRatio: 1, shadowMapSize: 4096, lite: false },
+};
+
 /**
- * Calidad según el dispositivo: pantallas táctiles (celulares, tablets) usan la versión liviana.
- * Se puede forzar con ?calidad=alta o ?calidad=baja.
+ * Calidad según el dispositivo: pantallas táctiles (celulares, tablets) y equipos de gama baja
+ * usan la versión liviana. Se puede forzar con ?calidad=alta o ?calidad=baja. Si igual no anda
+ * fluido, la resolución adaptativa avisa y la app pasa a la versión liviana en marcha.
  */
-export function detectQuality(search = location.search): Quality {
+export function detectQuality(search = location.search, hints: DeviceHints = deviceHints()): Quality {
   const p = new URLSearchParams(search).get("calidad");
-  const touch = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
-  const tier: Tier = p === "alta" || p === "baja" ? p : touch ? "baja" : "alta";
-  return tier === "baja"
-    ? { tier, maxPixelRatio: 1.5, minPixelRatio: 1, shadowMapSize: 2048, lite: true }
-    : { tier, maxPixelRatio: 2, minPixelRatio: 1, shadowMapSize: 4096, lite: false };
+  const tier: Tier = p === "alta" || p === "baja" ? p : hints.touch || isLowEnd(hints) ? "baja" : "alta";
+  return { ...QUALITY[tier] };
 }
 
 /**
@@ -38,17 +63,36 @@ export class AdaptiveResolution {
   private elapsed = 0;
   private warmup = 2.5;
   private goodWindows = 0;
+  private badWindows = 0;
+  private struggled = false;
   pixelRatio: number;
+  /**
+   * Se llama una sola vez si, ya en la resolución mínima, sigue por debajo de `strugglingFps`
+   * durante dos ventanas seguidas: bajar la resolución no alcanza y hay que aliviar la escena.
+   */
+  onStruggle?: () => void;
+  strugglingFps = 28;
 
   constructor(
     private readonly renderer: THREE.WebGLRenderer,
     private readonly getSize: () => { w: number; h: number },
     private readonly min: number,
-    private readonly max: number,
+    private max: number,
     private readonly targetLow = 42,
     private readonly targetHigh = 57,
   ) {
     this.pixelRatio = renderer.getPixelRatio();
+  }
+
+  /** Cambia el tope de densidad de píxeles (al pasar a la versión liviana). */
+  setMax(max: number): void {
+    this.max = max;
+    if (this.pixelRatio > max) {
+      this.pixelRatio = max;
+      const { w, h } = this.getSize();
+      this.renderer.setPixelRatio(max);
+      this.renderer.setSize(w, h);
+    }
   }
 
   /** Llamar una vez por cuadro con el dt real (s). Devuelve true si cambió la resolución. */
@@ -64,6 +108,12 @@ export class AdaptiveResolution {
     const fps = this.frames / this.elapsed;
     this.frames = 0;
     this.elapsed = 0;
+    if (this.pixelRatio <= this.min && fps < this.strugglingFps) {
+      if (++this.badWindows >= 2 && !this.struggled) {
+        this.struggled = true;
+        this.onStruggle?.();
+      }
+    } else this.badWindows = 0;
     let next = this.pixelRatio;
     if (fps < this.targetLow && this.pixelRatio > this.min) {
       next = Math.max(this.min, this.pixelRatio - 0.25);

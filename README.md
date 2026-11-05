@@ -29,7 +29,7 @@ La compresión usa [glTF Transform](https://gltf-transform.dev) y three.js la de
 
 ## Celulares y rendimiento
 
-- **Calidad según el dispositivo:** las pantallas táctiles usan la mesa liviana, sombras de 2048 px y resolución de hasta 1,5×. Se puede forzar con `?calidad=alta` o `?calidad=baja`.
+- **Calidad según el dispositivo:** las pantallas táctiles y los equipos de gama baja (el navegador informa 4 GB de memoria o menos, o 2 núcleos o menos) usan la mesa liviana, sombras de 2048 px y resolución de hasta 1,5×. Si un equipo no detectado igual anda lento (menos de 28 FPS ya en la resolución mínima), la app pasa sola a la versión liviana, sin recargar. Se puede forzar con `?calidad=alta` o `?calidad=baja`.
 - **Resolución adaptativa:** mide los FPS y baja o sube la densidad de píxeles de a 0,25 para mantener la fluidez.
 - **Sombras a demanda:** el mapa de sombras solo se recalcula cuando se mueve algo que proyecta sombra (puntas, perillas, cables), no al mover la cámara.
 - **Táctil:** para apoyar una punta se apoya el dedo y se arrastra; la mira va 64 px por encima del dedo y la punta se apoya al soltar. Las perillas se giran arrastrando y los textos de ayuda cambian a gestos táctiles.
