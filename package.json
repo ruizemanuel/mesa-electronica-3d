@@ -12,12 +12,14 @@
     "assets:fetch": "node tools/py.mjs tools/fetch_assets.py",
     "assets:convert": "node tools/py.mjs tools/usd_to_glb.py",
     "record": "node tools/record-showcase.mjs",
-    "record:preview": "node tools/record-showcase.mjs --preview"
+    "record:preview": "node tools/record-showcase.mjs --preview",
+    "assets:optimize": "node tools/optimize_models.mjs"
   },
   "dependencies": {
     "three": "^0.187.0"
   },
   "devDependencies": {
+    "@gltf-transform/cli": "4.5.1",
     "@types/three": "^0.187.0",
     "playwright": "^1.64.1",
     "typescript": "^7.0.2",

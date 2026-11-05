@@ -15,14 +15,17 @@ pnpm test         # tests de la física (MNA, instrumentos, térmica, fusibles)
 pnpm build
 ```
 
-Los GLB ya convertidos están en `public/models/`. Para regenerarlos o agregar otros assets:
+Los GLB ya convertidos y comprimidos están en `public/models/` (5,7 MB en total). Para regenerarlos o agregar otros assets:
 
 ```bash
 python -m venv .venv
 .venv/Scripts/python -m pip install usd-core pillow numpy   # (Linux/mac: .venv/bin/python)
 pnpm assets:fetch     # baja de Hugging Face los assets de tools/assets.json (~550 MB a .cache/)
-pnpm assets:convert   # USD -> GLB con texturas reducidas, en public/models/
+pnpm assets:convert   # USD -> GLB crudo con texturas reducidas, en .cache/glb/ (~26 MB)
+pnpm assets:optimize  # meshopt + texturas WebP, en public/models/ (~5,7 MB)
 ```
+
+La compresión usa [glTF Transform](https://gltf-transform.dev) y three.js la decodifica con `MeshoptDecoder`, sin archivos wasm aparte. No se simplifica la geometría: en el panel perforado de la mesa dejaba artefactos de sombreado.
 
 `tools/usd_to_glb.py` compone el stage completo con `usd-core` (referencias, payloads, variantes e instancias), descarta las mallas de colisión y guía, pasa de Z-up a Y-up, lee los materiales `UsdPreviewSurface` (albedo / ORM / normal + `UsdTransform2d`) y hornea el tiling en las UV.
 
@@ -36,6 +39,8 @@ pnpm record                  # -> media/showcase.mp4
 pnpm record:preview          # cuadros sueltos en media/preview/ para revisar encuadres
 node tools/record-showcase.mjs --url tu-dominio.app   # texto de la placa final
 ```
+
+La imagen de vista previa del link (`public/og.jpg`, 1200×630) también sale de la escena real: con `pnpm dev` corriendo, `node tools/og-image.mjs` la regenera.
 
 ## Qué se simula (y con qué precisión)
 

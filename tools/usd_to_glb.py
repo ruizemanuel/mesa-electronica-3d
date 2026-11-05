@@ -6,6 +6,7 @@
 - Lee materiales UsdPreviewSurface (albedo / ORM / normal + UsdTransform2d) y hornea
   el tiling de cada material en las UV de sus triángulos.
 - Reduce texturas (8K PNG -> 512/1024 JPG) y las embebe en el GLB.
+- Escribe en .cache/glb; después `pnpm assets:optimize` comprime (meshopt + WebP) a public/models.
 
 Uso:  .venv/Scripts/python.exe -I tools/usd_to_glb.py [asset_id ...]
 """
@@ -27,7 +28,7 @@ Image.MAX_IMAGE_PIXELS = None
 
 ROOT = Path(__file__).resolve().parent.parent
 CACHE = ROOT / ".cache" / "simready"
-OUT = ROOT / "public" / "models"
+OUT = ROOT / ".cache" / "glb"  # crudos; tools/optimize_models.mjs los comprime a public/models
 CONFIG = json.loads((ROOT / "tools" / "assets.json").read_text(encoding="utf-8"))
 
 

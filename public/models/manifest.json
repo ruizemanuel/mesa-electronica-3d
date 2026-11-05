@@ -4,7 +4,7 @@
     "file": "models/furniture_workbench_standard_e01.glb",
     "bboxMin": [
       -0.27583,
-      0.0,
+      0,
       -0.76568
     ],
     "bboxMax": [
@@ -14,14 +14,14 @@
     ],
     "triangles": 505434,
     "materials": 6,
-    "bytes": 16591804
+    "bytes": 3522036
   },
   "lamp_table_bedside_a01": {
     "id": "lamp_table_bedside_a01",
     "file": "models/lamp_table_bedside_a01.glb",
     "bboxMin": [
       -0.09439,
-      4e-05,
+      0.00004,
       -0.09938
     ],
     "bboxMax": [
@@ -31,14 +31,14 @@
     ],
     "triangles": 49166,
     "materials": 5,
-    "bytes": 1523100
+    "bytes": 331600
   },
   "handTool_pliers_long_nose_a01": {
     "id": "handTool_pliers_long_nose_a01",
     "file": "models/handTool_pliers_long_nose_a01.glb",
     "bboxMin": [
       -0.08698,
-      4e-05,
+      0.00004,
       -0.03432
     ],
     "bboxMax": [
@@ -48,14 +48,14 @@
     ],
     "triangles": 67794,
     "materials": 2,
-    "bytes": 2190512
+    "bytes": 465052
   },
   "handTool_pliers_diagonal_cutting_a01": {
     "id": "handTool_pliers_diagonal_cutting_a01",
     "file": "models/handTool_pliers_diagonal_cutting_a01.glb",
     "bboxMin": [
       -0.11082,
-      2e-05,
+      0.00002,
       -0.03424
     ],
     "bboxMax": [
@@ -65,7 +65,7 @@
     ],
     "triangles": 70760,
     "materials": 2,
-    "bytes": 2254684
+    "bytes": 479152
   },
   "handTool_screwdriver_slotted_4mm_a01": {
     "id": "handTool_screwdriver_slotted_4mm_a01",
@@ -82,14 +82,14 @@
     ],
     "triangles": 43974,
     "materials": 2,
-    "bytes": 1444660
+    "bytes": 283288
   },
   "dishware_mug_coffee_a01": {
     "id": "dishware_mug_coffee_a01",
     "file": "models/dishware_mug_coffee_a01.glb",
     "bboxMin": [
       -0.08026,
-      0.0,
+      0,
       -0.0405
     ],
     "bboxMax": [
@@ -99,14 +99,14 @@
     ],
     "triangles": 11766,
     "materials": 1,
-    "bytes": 392984
+    "bytes": 84200
   },
   "chair_office_amf_black_a01": {
     "id": "chair_office_amf_black_a01",
     "file": "models/chair_office_amf_black_a01.glb",
     "bboxMin": [
       -0.26986,
-      0.0,
+      0,
       -0.28614
     ],
     "bboxMax": [
@@ -116,6 +116,6 @@
     ],
     "triangles": 32253,
     "materials": 4,
-    "bytes": 1335204
+    "bytes": 528576
   }
 }

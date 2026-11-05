@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import { canvasTexture, shadows } from "./util";
@@ -172,7 +173,8 @@ export function createWorld(container: HTMLElement, opts: { preserveDrawingBuffe
 }
 
 export async function loadSimReady(scene: THREE.Scene, onProgress: (loaded: number, total: number, label: string) => void): Promise<Map<string, THREE.Object3D>> {
-  const loader = new GLTFLoader();
+  // los modelos van comprimidos con meshopt + WebP (tools/optimize_models.mjs)
+  const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
   const out = new Map<string, THREE.Object3D>();
   let done = 0;
   onProgress(0, SIMREADY_LAYOUT.length, "Cargando assets SimReady…");
