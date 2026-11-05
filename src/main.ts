@@ -14,13 +14,18 @@ import { DIAL_LABEL, type Jack } from "./sim/dmm";
 import { colorBands, formatSI } from "./sim/resistor";
 import { Panel } from "./ui/panel";
 import { installCapture } from "./capture";
+import { IS_TOUCH, TAP } from "./input";
+import { AdaptiveResolution, ShadowInvalidator, detectQuality } from "./quality";
 
 const V3 = THREE.Vector3;
 const CAPTURE = new URLSearchParams(location.search).has("capture");
 if (CAPTURE) document.body.classList.add("capture");
+// el video se graba siempre en calidad alta
+const quality = CAPTURE ? detectQuality("?calidad=alta") : detectQuality();
 const bench = new Bench();
 const audio = new BenchAudio();
-const world = createWorld(document.getElementById("viewport")!, { preserveDrawingBuffer: CAPTURE });
+const viewportEl = document.getElementById("viewport")!;
+const world = createWorld(viewportEl, quality, { preserveDrawingBuffer: CAPTURE });
 const { scene, camera } = world;
 
 // ------------------------------------------------------------------ instrumentos
@@ -255,6 +260,7 @@ function holeLabel(hole: string): string {
   return `Agujero <b>${hole}</b> · tira ${net[0] === "T" ? `${hole.replace(/\D/g, "")}a–e` : `${hole.replace(/\D/g, "")}f–j`}`;
 }
 
+const KNOB_HELP = IS_TOUCH ? "Arrastrá hacia arriba o abajo" : "Rueda o arrastrar · Shift ×10 · Alt ×0,1";
 const POST_LABEL: Record<PsuPost, string> = { "psu+": "Borne + (rojo)", "psu-": "Borne − (negro)", psuGnd: "Borne GND (tierra, aislado de la salida)" };
 const JACK_INFO: Record<Jack, string> = {
   VOhm: "Borna VΩ·))) — tensión, resistencia y continuidad",
@@ -268,8 +274,8 @@ const picker = new Picker(camera, world.renderer.domElement, world.controls, [dm
     if (holding) {
       const t = targetFromPick(p);
       const who = holding === "red" ? "roja" : "negra";
-      if (t) return `${t.kind === "hole" ? holeLabel(t.hole) : POST_LABEL[t.post]}<br><span class="k">Clic: apoyar la punta ${who}</span>`;
-      return `<span class="k">Clic en un agujero, una pata o un borne · Esc cancela</span>`;
+      if (t) return `${t.kind === "hole" ? holeLabel(t.hole) : POST_LABEL[t.post]}<br><span class="k">${IS_TOUCH ? "Soltá" : "Clic"}: apoyar la punta ${who}</span>`;
+      return IS_TOUCH ? `<span class="k">Mové la mira sobre un agujero, una pata o un borne</span>` : `<span class="k">Clic en un agujero, una pata o un borne · Esc cancela</span>`;
     }
     if (id === "breadboard") {
       const h = bb.nearestHole(p.hit.point, 1.6);
@@ -285,9 +291,9 @@ const picker = new Picker(camera, world.renderer.domElement, world.controls, [dm
     }
     if (id.startsWith("jumper:")) {
       const j = id.slice(7);
-      return bench.jumperPresent.get(j) ? `Puente <b>${j}</b><br><span class="k">Clic: quitarlo (abre el circuito)</span>` : `Puente <b>${j}</b> (quitado)<br><span class="k">Clic: volver a ponerlo</span>`;
+      return bench.jumperPresent.get(j) ? `Puente <b>${j}</b><br><span class="k">${TAP}: quitarlo (abre el circuito)</span>` : `Puente <b>${j}</b> (quitado)<br><span class="k">${TAP}: volver a ponerlo</span>`;
     }
-    if (id === "dmm:dial") return `Llave: <b>${DIAL_LABEL[bench.dmm.dial]}</b><br><span class="k">Clic izq./der. o rueda para girar</span>`;
+    if (id === "dmm:dial") return `Llave: <b>${DIAL_LABEL[bench.dmm.dial]}</b><br><span class="k">${IS_TOUCH ? "Tocá a la izquierda o a la derecha para girarla" : "Clic izq./der. o rueda para girar"}</span>`;
     if (id.startsWith("dmm:btn:")) {
       const b = id.slice(8);
       const d: Record<string, string> = {
@@ -297,16 +303,16 @@ const picker = new Picker(camera, world.renderer.domElement, world.controls, [dm
       };
       return d[b];
     }
-    if (id.startsWith("dmm:jack:")) return `${JACK_INFO[id.slice(9) as Jack]}<br><span class="k">Clic: pasar la punta roja aquí</span>`;
-    if (id === "dmm:plug:red") return `Ficha roja en <b>${bench.dmm.red === "VOhm" ? "VΩ" : bench.dmm.red === "mA" ? "mA" : "10A"}</b><br><span class="k">Clic: cambiar de borna</span>`;
+    if (id.startsWith("dmm:jack:")) return `${JACK_INFO[id.slice(9) as Jack]}<br><span class="k">${TAP}: pasar la punta roja aquí</span>`;
+    if (id === "dmm:plug:red") return `Ficha roja en <b>${bench.dmm.red === "VOhm" ? "VΩ" : bench.dmm.red === "mA" ? "mA" : "10A"}</b><br><span class="k">${TAP}: cambiar de borna</span>`;
     if (id === "dmm:plug:black") return "Ficha negra en COM";
     if (id === "dmm:lcd" || id === "dmm:body") return "Multímetro digital DM-6000 · 6000 cuentas";
-    if (id === "psu:knob:V") return `Tensión programada: <b>${bench.psu.vset.toFixed(2)} V</b><br><span class="k">Rueda o arrastrar · Shift ×10 · Alt ×0,1</span>`;
-    if (id === "psu:knob:A") return `Límite de corriente: <b>${bench.psu.iset.toFixed(3)} A</b><br><span class="k">Rueda o arrastrar · Shift ×10 · Alt ×0,1</span>`;
-    if (id === "psu:output") return `OUTPUT ${bench.psu.output ? "<b>encendida</b>" : "apagada"}<br><span class="k">Clic para ${bench.psu.output ? "apagar" : "encender"} la salida</span>`;
+    if (id === "psu:knob:V") return `Tensión programada: <b>${bench.psu.vset.toFixed(2)} V</b><br><span class="k">${KNOB_HELP}</span>`;
+    if (id === "psu:knob:A") return `Límite de corriente: <b>${bench.psu.iset.toFixed(3)} A</b><br><span class="k">${KNOB_HELP}</span>`;
+    if (id === "psu:output") return `OUTPUT ${bench.psu.output ? "<b>encendida</b>" : "apagada"}<br><span class="k">${TAP} para ${bench.psu.output ? "apagar" : "encender"} la salida</span>`;
     if (id.startsWith("psu:post:")) return POST_LABEL[id.slice(9) as PsuPost];
     if (id === "psu:display" || id === "psu:body") return "Fuente de laboratorio 0–30 V / 0–3 A";
-    if (id.startsWith("probe:")) return `Punta ${id.endsWith("red") ? "roja" : "negra"}<br><span class="k">Clic para tomarla</span>`;
+    if (id.startsWith("probe:")) return `Punta ${id.endsWith("red") ? "roja" : "negra"}<br><span class="k">${TAP} para tomarla</span>`;
     return null;
   },
   click(p, ev) {
@@ -381,6 +387,16 @@ const picker = new Picker(camera, world.renderer.domElement, world.controls, [dm
   contextMenu() {
     if (holding) setHolding(null);
   },
+  aiming() {
+    return holding !== null;
+  },
+  skip(id) {
+    // con una punta en la mano, las puntas no se pueden tocar y taparían el agujero apuntado
+    return holding !== null && id.startsWith("probe:");
+  },
+  aimEmptyLabel() {
+    return `<span class="k">Soltar acá devuelve la punta a la mesa</span>`;
+  },
 });
 
 // los desplegables del panel sueltan el foco al cambiar, así los atajos de teclado siguen andando
@@ -407,28 +423,33 @@ function computeHint(): string {
   const d = b.dmm;
   const t = (s: string) => `<span class="i">💡</span> ${s}`;
   const w = (s: string) => `<span class="i">⚠️</span> ${s}`;
-  if (holding) return t(`Sosteniendo la punta <b>${holding === "red" ? "roja" : "negra"}</b>: hacé clic en un agujero del protoboard, en la pata de un componente o en un borne de la fuente. <kbd>Esc</kbd> cancela.`);
+  if (holding)
+    return t(
+      IS_TOUCH
+        ? `Sosteniendo la punta <b>${holding === "red" ? "roja" : "negra"}</b>: apoyá el dedo sobre la mesa y arrastrá. La mira va un poco más arriba del dedo; al soltar, la punta se apoya donde está la mira. Soltar en un lugar vacío la devuelve a la mesa.`
+        : `Sosteniendo la punta <b>${holding === "red" ? "roja" : "negra"}</b>: hacé clic en un agujero del protoboard, en la pata de un componente o en un borne de la fuente. <kbd>Esc</kbd> cancela.`,
+    );
   if (d.leadAlert) return w("<b>LEAd</b>: la punta roja está en una borna de corriente pero la llave no está en ese modo. Así el multímetro es un <b>cortocircuito</b> entre las puntas.");
   if ((d.dial === "mA" && d.fuseMa.blown) || (d.dial === "A" && d.fuseA.blown)) return w("El fusible de esa borna está quemado: el multímetro va a marcar 0. Cambialo en el panel.");
   if ((d.dial === "mA" || d.dial === "A") && d.red === "VOhm") return t(`Para medir corriente pasá la punta roja a la borna <b>${d.dial === "A" ? "10A" : "mA"}</b>.`);
   if ((d.dial === "mA" || d.dial === "A") && [...b.jumperPresent.values()].every(Boolean))
-    return t("El amperímetro va en <b>serie</b>: quitá un puente (clic sobre él) y apoyá las puntas en los dos agujeros que quedaron sueltos.");
+    return t(`El amperímetro va en <b>serie</b>: quitá un puente (${TAP.toLowerCase()} sobre él) y apoyá las puntas en los dos agujeros que quedaron sueltos.`);
   if ((d.dial === "OHM" || d.dial === "CONT") && b.psu.output) return w("Estás midiendo resistencia con la fuente encendida: la lectura no es válida. Apagá la salida (OUTPUT).");
   if (d.dial === "OHM" && b.probes.red && b.probes.black && [...b.jumperPresent.values()].every(Boolean))
     return t("Medir un resistor <b>en el circuito</b> incluye los caminos en paralelo. Para medirlo solo, abrí los puentes que lo conectan al resto.");
   if (d.dial === "VAC") return t("En V~ (alterna) una tensión continua se lee ≈ 0: el instrumento bloquea la componente DC.");
-  if (d.dial === "OFF") return t("Encendé el multímetro girando la llave (clic o rueda sobre ella).");
-  if (!b.psu.output && (d.dial === "VDC" || d.dial === "mA" || d.dial === "A")) return t("La salida de la fuente está apagada: presioná <b>OUTPUT</b> (o la tecla <kbd>O</kbd>).");
-  if (!b.probes.red || !b.probes.black) return t("Tomá las puntas (clic en ellas, o teclas <kbd>R</kbd> y <kbd>N</kbd>) y apoyalas en el circuito.");
+  if (d.dial === "OFF") return t(IS_TOUCH ? "Encendé el multímetro: tocá la llave del lado derecho para girarla (o elegí la función en el panel)." : "Encendé el multímetro girando la llave (clic o rueda sobre ella).");
+  if (!b.psu.output && (d.dial === "VDC" || d.dial === "mA" || d.dial === "A")) return t(`La salida de la fuente está apagada: presioná <b>OUTPUT</b>${IS_TOUCH ? "" : " (o la tecla <kbd>O</kbd>)"}.`);
+  if (!b.probes.red || !b.probes.black) return t(IS_TOUCH ? "Tomá una punta (botones del panel o tocándola en la mesa) y apoyala en el circuito." : "Tomá las puntas (clic en ellas, o teclas <kbd>R</kbd> y <kbd>N</kbd>) y apoyalas en el circuito.");
   if (b.psu.output && b.psu.mode === "CC") return t("La fuente está en <b>CC</b>: limita la corriente y baja la tensión. Subí el límite de corriente si querés que vuelva a CV.");
-  return t("Anotá las lecturas en el cuaderno (<kbd>Espacio</kbd>) para calcular la potencia.");
+  return t(`Anotá las lecturas en el cuaderno${IS_TOUCH ? "" : " (<kbd>Espacio</kbd>)"} para calcular la potencia.`);
 }
 
 // ------------------------------------------------------------------ carga de assets
 const loading = document.getElementById("loading")!;
 const bar = loading.querySelector<HTMLElement>(".bar i")!;
 const label = loading.querySelector<HTMLElement>(".label")!;
-const assetsReady = loadSimReady(scene, (n, total, id) => {
+const assetsReady = loadSimReady(scene, quality, (n, total, id) => {
   bar.style.width = `${(n / total) * 100}%`;
   label.textContent = n < total ? `Cargando SimReady · ${id}` : "Listo";
 }).then((objs) => {
@@ -440,11 +461,14 @@ const assetsReady = loadSimReady(scene, (n, total, id) => {
       m.emissiveIntensity = 1.4;
     }
   });
+  shadowInvalidator.invalidate();
   if (CAPTURE) loading.classList.add("done");
   else setTimeout(() => loading.classList.add("done"), 300);
 });
 
 // ------------------------------------------------------------------ loop
+// sombras: solo se recalculan si se movió o cambió algo que proyecta sombra
+const shadowInvalidator = new ShadowInvalidator(world.renderer, [dmm3d.group, psu3d.group, bb.group, probes.red.group, probes.black.group, ...Object.values(cables).map((c) => c.mesh)]);
 let acc = 0;
 let uiTimer = 0;
 const SIM_DT = 0.02;
@@ -490,6 +514,7 @@ function stepFrame(dt: number): void {
     panel.setHint(computeHint());
   }
   world.tick(dt);
+  shadowInvalidator.check();
   world.renderer.render(scene, camera);
 }
 
@@ -497,15 +522,22 @@ if (CAPTURE) {
   // modo captura: el tiempo avanza solo cuando el grabador pide un cuadro (ver tools/record-showcase.mjs)
   installCapture({ world, bench, bb, stepFrame, ready: assetsReady });
 } else {
+  const adaptive = new AdaptiveResolution(
+    world.renderer,
+    () => ({ w: viewportEl.clientWidth, h: viewportEl.clientHeight }),
+    quality.minPixelRatio,
+    Math.min(window.devicePixelRatio, quality.maxPixelRatio),
+  );
   let last = performance.now();
   const loop = (now: number) => {
-    const dt = Math.min(0.1, (now - last) / 1000);
+    const raw = (now - last) / 1000;
     last = now;
-    stepFrame(dt);
+    adaptive.tick(raw);
+    stepFrame(Math.min(0.1, raw));
     requestAnimationFrame(loop);
   };
   requestAnimationFrame(loop);
 }
 
 // para depurar desde la consola
-if (import.meta.env.DEV || CAPTURE) Object.assign(window, { bench, world, bb, dmm3d, psu3d, THREE });
+if (import.meta.env.DEV || CAPTURE) Object.assign(window, { bench, world, bb, dmm3d, psu3d, THREE, quality });

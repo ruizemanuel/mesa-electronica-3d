@@ -3,6 +3,7 @@ import { CIRCUITS } from "../sim/circuits";
 import { DIAL_LABEL, DIAL_POSITIONS, type Dial, type Jack } from "../sim/dmm";
 import { colorBands, eSeriesValues, formatSI, type PowerRating, type ResistorSpec } from "../sim/resistor";
 import { VIEWS } from "../scene/world";
+import { IS_TOUCH } from "../input";
 
 export interface PanelActions {
   loadCircuit(id: string): void;
@@ -44,6 +45,19 @@ const QTY: Record<Dial, string> = {
 const JACK_LABEL: Record<Jack, string> = { VOhm: "VΩ", mA: "mA", A: "10A" };
 const POWERS: PowerRating[] = [0.25, 0.5, 1, 2];
 const POWER_LABEL: Record<number, string> = { 0.25: "¼ W", 0.5: "½ W", 1: "1 W", 2: "2 W" };
+
+const MOUSE_HELP = `
+          <li><b>Rotar</b>: arrastrar · <b>Desplazar</b>: botón derecho · <b>Zoom</b>: rueda</li>
+          <li><b>Llave del multímetro</b>: clic izq./der. o rueda</li>
+          <li><b>Perillas de la fuente</b>: rueda o arrastrar (Shift ×10, Alt ×0,1)</li>
+          <li><b>Puntas</b>: clic en la punta y luego en un agujero, una pata o un borne. <kbd>Esc</kbd> cancela.</li>
+          <li><b>Puentes</b>: clic para quitar/poner</li>`;
+const TOUCH_HELP = `
+          <li><b>Rotar</b>: arrastrar con un dedo · <b>Zoom y desplazar</b>: dos dedos</li>
+          <li><b>Llave del multímetro</b>: tocá a la izquierda o a la derecha de la llave</li>
+          <li><b>Perillas de la fuente</b>: arrastrá hacia arriba o abajo (o escribí el valor en el panel)</li>
+          <li><b>Puntas</b>: tomá una punta, apoyá el dedo y arrastrá; la mira va por encima del dedo y la punta se apoya al soltar</li>
+          <li><b>Puentes</b>: tocalos para quitarlos o ponerlos</li>`;
 
 const h = <K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Record<string, string> = {}, html = ""): HTMLElementTagNameMap[K] => {
   const el = document.createElement(tag);
@@ -158,11 +172,7 @@ export class Panel {
       <section class="help">
         <h2>Controles</h2>
         <ul>
-          <li><b>Rotar</b>: arrastrar · <b>Desplazar</b>: botón derecho · <b>Zoom</b>: rueda</li>
-          <li><b>Llave del multímetro</b>: clic izq./der. o rueda</li>
-          <li><b>Perillas de la fuente</b>: rueda o arrastrar (Shift ×10, Alt ×0,1)</li>
-          <li><b>Puntas</b>: clic en la punta y luego en un agujero, una pata o un borne. <kbd>Esc</kbd> cancela.</li>
-          <li><b>Puentes</b>: clic para quitar/poner</li>
+          ${IS_TOUCH ? TOUCH_HELP : MOUSE_HELP}
         </ul>
       </section>`;
 

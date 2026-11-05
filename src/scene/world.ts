@@ -3,6 +3,7 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
+import { LITE_MODELS, type Quality } from "../quality";
 import { canvasTexture, shadows } from "./util";
 
 /** Altura del tablero de furniture_workbench_standard_e01 (medida sobre la geometría convertida). */
@@ -37,6 +38,9 @@ export const VIEWS: Record<string, CameraView> = {
   fuente: { name: "Fuente", pos: [-0.28, 0.84, 0.31], target: [-0.35, 0.74, 0.04] },
 };
 
+/** Proporción de pantalla con la que se diseñaron las vistas (zona 3D de un monitor 16:9). */
+const DESIGN_ASPECT = 1.55;
+
 export interface World {
   renderer: THREE.WebGLRenderer;
   scene: THREE.Scene;
@@ -44,16 +48,18 @@ export interface World {
   controls: OrbitControls;
   lampLight: THREE.PointLight;
   goTo(view: CameraView): void;
+  /** La vista ajustada a la proporción actual de la pantalla. */
+  fit(view: CameraView): CameraView;
   tick(dt: number): void;
 }
 
-export function createWorld(container: HTMLElement, opts: { preserveDrawingBuffer?: boolean } = {}): World {
+export function createWorld(container: HTMLElement, quality: Quality, opts: { preserveDrawingBuffer?: boolean } = {}): World {
   const renderer = new THREE.WebGLRenderer({
     antialias: true,
     powerPreference: "high-performance",
     preserveDrawingBuffer: opts.preserveDrawingBuffer ?? false,
   });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, quality.maxPixelRatio));
   renderer.setSize(container.clientWidth, container.clientHeight);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -77,7 +83,24 @@ export function createWorld(container: HTMLElement, opts: { preserveDrawingBuffe
   controls.maxPolarAngle = Math.PI * 0.49;
   controls.zoomToCursor = true;
   controls.screenSpacePanning = true;
-  const v0 = VIEWS.general;
+  /**
+   * En pantallas más angostas que el diseño (celular vertical, notebooks) la cámara se aleja en
+   * proporción, para que entre el mismo ancho de mesa.
+   */
+  const fit = (view: CameraView): CameraView => {
+    if (camera.aspect >= DESIGN_ASPECT) return view;
+    // 0 = pantalla de diseño, 1 = celular vertical (aspecto ≈ 0,85)
+    const narrow = Math.min(1, (DESIGN_ASPECT / camera.aspect - 1) / 0.85);
+    const t0 = new THREE.Vector3(...view.target);
+    const s = new THREE.Spherical().setFromVector3(new THREE.Vector3(...view.pos).sub(t0));
+    // alejarse lo justo para que entren fuente, protoboard y multímetro (las vistas cercanas, menos)
+    s.radius *= 1 + 0.35 * narrow * Math.min(1, s.radius / 0.6);
+    s.phi *= 1 - 0.4 * narrow; // mirar más desde arriba: usa el alto de la pantalla y saltea la silla
+    const t = t0;
+    const p = new THREE.Vector3().setFromSpherical(s).add(t);
+    return { ...view, pos: p.toArray() as [number, number, number], target: t.toArray() as [number, number, number] };
+  };
+  const v0 = fit(VIEWS.general);
   camera.position.set(...v0.pos);
   controls.target.set(...v0.target);
 
@@ -87,7 +110,7 @@ export function createWorld(container: HTMLElement, opts: { preserveDrawingBuffe
   sun.position.set(-1.2, 2.6, 1.6);
   sun.target.position.set(0, BENCH_TOP, 0);
   sun.castShadow = true;
-  sun.shadow.mapSize.set(4096, 4096);
+  sun.shadow.mapSize.set(quality.shadowMapSize, quality.shadowMapSize);
   sun.shadow.camera.left = -1.1;
   sun.shadow.camera.right = 1.1;
   sun.shadow.camera.top = 1.1;
@@ -147,7 +170,7 @@ export function createWorld(container: HTMLElement, opts: { preserveDrawingBuffe
   const goTo = (view: CameraView) => {
     tween = {
       from: { name: "", pos: camera.position.toArray() as [number, number, number], target: controls.target.toArray() as [number, number, number] },
-      to: view,
+      to: fit(view),
       t: 0,
     };
   };
@@ -159,6 +182,7 @@ export function createWorld(container: HTMLElement, opts: { preserveDrawingBuffe
     controls,
     lampLight,
     goTo,
+    fit,
     tick(dt: number) {
       if (tween) {
         tween.t = Math.min(1, tween.t + dt / 0.9);
@@ -172,7 +196,11 @@ export function createWorld(container: HTMLElement, opts: { preserveDrawingBuffe
   };
 }
 
-export async function loadSimReady(scene: THREE.Scene, onProgress: (loaded: number, total: number, label: string) => void): Promise<Map<string, THREE.Object3D>> {
+export async function loadSimReady(
+  scene: THREE.Scene,
+  quality: Quality,
+  onProgress: (loaded: number, total: number, label: string) => void,
+): Promise<Map<string, THREE.Object3D>> {
   // los modelos van comprimidos con meshopt + WebP (tools/optimize_models.mjs)
   const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
   const out = new Map<string, THREE.Object3D>();
@@ -181,7 +209,8 @@ export async function loadSimReady(scene: THREE.Scene, onProgress: (loaded: numb
   await Promise.all(
     SIMREADY_LAYOUT.map(async (pl) => {
       try {
-        const gltf = await loader.loadAsync(`${import.meta.env.BASE_URL}models/${pl.id}.glb`);
+        const file = quality.lite && LITE_MODELS.has(pl.id) ? `${pl.id}.lite.glb` : `${pl.id}.glb`;
+        const gltf = await loader.loadAsync(`${import.meta.env.BASE_URL}models/${file}`);
         const obj = gltf.scene;
         obj.name = pl.id;
         obj.position.set(...pl.pos);
