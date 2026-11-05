@@ -77,7 +77,7 @@ export class Panel {
       <header class="brand">
         <div>
           <h1>Mesa de electrónica</h1>
-          <p>Assets 3D: <a href="https://huggingface.co/datasets/nvidia/simready-assets" target="_blank" rel="noopener">NVIDIA SimReady</a> (CC-BY-4.0)</p>
+          <p>Assets 3D: <a href="https://huggingface.co/datasets/nvidia/simready-assets" target="_blank" rel="noopener">NVIDIA SimReady</a> (CC-BY-4.0) · <a href="https://github.com/ruizemanuel/mesa-electronica-3d" target="_blank" rel="noopener">código en GitHub</a></p>
         </div>
         <button class="icon" id="mute" title="Sonido">🔊</button>
       </header>

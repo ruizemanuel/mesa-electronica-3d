@@ -1,5 +1,7 @@
 # Mesa de electrónica · SimReady
 
+**Demo: <https://mesa-electronica-3d.vercel.app>**
+
 Mesa de trabajo 3D en el navegador para practicar mediciones reales de **tensión, corriente, resistencia y potencia** con un multímetro digital y una fuente de laboratorio, sobre circuitos armados en un protoboard.
 
 El entorno (mesa, lámpara, herramientas, taza, silla) usa assets **OpenUSD de [NVIDIA SimReady](https://huggingface.co/datasets/nvidia/simready-assets)** (CC-BY-4.0), convertidos a GLB. Los instrumentos y el protoboard están modelados a escala real y son interactivos.
