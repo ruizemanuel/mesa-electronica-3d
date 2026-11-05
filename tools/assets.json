@@ -1,0 +1,14 @@
+{
+  "dataset": "nvidia/simready-assets",
+  "revision": "main",
+  "textureMaxSize": 1024,
+  "assets": [
+    { "id": "furniture_workbench_standard_e01", "textureMaxSize": 1024 },
+    { "id": "lamp_table_bedside_a01", "textureMaxSize": 512 },
+    { "id": "handTool_pliers_long_nose_a01", "textureMaxSize": 512 },
+    { "id": "handTool_pliers_diagonal_cutting_a01", "textureMaxSize": 512 },
+    { "id": "handTool_screwdriver_slotted_4mm_a01", "textureMaxSize": 512 },
+    { "id": "dishware_mug_coffee_a01", "textureMaxSize": 512 },
+    { "id": "chair_office_amf_black_a01", "textureMaxSize": 512 }
+  ]
+}

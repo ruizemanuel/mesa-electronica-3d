@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Mesa de electrónica · SimReady</title>
+    <meta name="description" content="Mesa de trabajo 3D para practicar mediciones de tensión, corriente, resistencia y potencia con un multímetro y una fuente de laboratorio simulados." />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <main id="app">
+      <div id="viewport"></div>
+      <aside id="panel"></aside>
+    </main>
+    <div id="toasts"></div>
+    <div id="loading">
+      <div class="box">
+        <b>Mesa de electrónica</b>
+        <span class="label">Preparando…</span>
+        <div class="bar"><i></i></div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
