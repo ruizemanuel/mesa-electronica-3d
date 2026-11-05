@@ -11,6 +11,7 @@ import { BENCH_TOP, VIEWS, createWorld, loadSimReady } from "./scene/world";
 import { Bench, type ProbeColor, type ProbeTarget, type PsuPost } from "./sim/bench";
 import { netOfHole } from "./sim/circuits";
 import { DIAL_LABEL, type Jack } from "./sim/dmm";
+import { DIODE_LABEL } from "./ui/ivcurve";
 import { colorBands, formatSI } from "./sim/resistor";
 import { Panel } from "./ui/panel";
 import { installCapture } from "./capture";
@@ -42,7 +43,7 @@ scene.add(psu3d.group);
 const bb = new Breadboard3D();
 bb.group.position.set(-0.02, BENCH_TOP, 0.1);
 scene.add(bb.group);
-bb.build(bench.circuit, bench.parts);
+bb.build(bench.circuit, bench.parts, bench.diodes);
 
 const probes: Record<ProbeColor, Probe3D> = { red: new Probe3D("red", "#c8261f"), black: new Probe3D("black", "#1b1b1b") };
 scene.add(probes.red.group, probes.black.group);
@@ -119,7 +120,7 @@ function placeProbe(c: ProbeColor, t: ProbeTarget): void {
 const panel = new Panel(bench, {
   loadCircuit(id) {
     bench.loadCircuit(id);
-    bb.build(bench.circuit, bench.parts);
+    bb.build(bench.circuit, bench.parts, bench.diodes);
     setHolding(null);
     panel.render();
   },
@@ -136,6 +137,22 @@ const panel = new Panel(bench, {
     const p = bench.parts.get(id)!;
     bench.setResistor(id, { ...p.spec });
     toast(`${id} reemplazado por otro del mismo valor (otra muestra del lote).`, "ok");
+  },
+  setDiode(id, type) {
+    bench.setDiode(id, type);
+    bench.refreshDmm();
+  },
+  flipDiode(id) {
+    bench.flipDiode(id);
+    bench.refreshDmm();
+    audio.click();
+    const d = bench.diodes.get(id)!;
+    toast(`${id} dado vuelta: ahora está ${d.reversed ? "en <b>inversa</b> (el cátodo hacia el +)" : "en <b>directa</b> (como estaba)"}.`, "info");
+  },
+  replaceDiode(id) {
+    bench.setDiode(id);
+    bench.refreshDmm();
+    toast(`${id} reemplazado por uno nuevo (otra muestra del lote).`, "ok");
   },
   dmmButton(b) {
     pressDmm(b);
@@ -187,7 +204,8 @@ function toggleOutput(): void {
   audio.click();
 }
 function pressDmm(b: DmmButton): void {
-  if (b === "RANGE") bench.dmm.pressRange();
+  if (b === "SELECT") bench.dmm.pressSelect();
+  else if (b === "RANGE") bench.dmm.pressRange();
   else if (b === "HOLD") bench.dmm.pressHold();
   else bench.dmm.pressRel();
   dmm3d.pressButton(b);
@@ -202,6 +220,15 @@ bench.on((e) => {
   } else if (e.kind === "burn") {
     audio.pop(0.7);
     toast(`<b>${e.id} se quemó</b> (circuito abierto). Superó largamente su potencia nominal.`, "bad");
+  } else if (e.kind === "diodeBurn") {
+    audio.pop(e.led ? 0.5 : 0.8);
+    const part = bench.diodes.get(e.id)!;
+    toast(
+      e.led
+        ? `<b>${e.id} se quemó</b> (circuito abierto): llegó a ${formatSI(e.peak, "A", 2)} y aguanta ${formatSI(part.model.ifMax, "A")}. Sin resistencia en serie, la corriente la limita solo la fuente. Reemplazalo en el panel.`
+        : `<b>${e.id} se quemó</b> (circuito abierto): la juntura pasó su temperatura máxima con ${formatSI(e.peak, "A", 2)}.`,
+      "bad",
+    );
   } else if (e.kind === "smoke") {
     toast(`<b>${e.id} está humeando</b>: disipa más potencia de la que soporta.`, "bad");
   } else if (e.kind === "cc" && e.on) {
@@ -237,14 +264,18 @@ function targetFromPick(p: PickHit | null): ProbeTarget {
     const hole = bb.nearestHole(p.hit.point, 1.6);
     return hole ? { kind: "hole", hole } : null;
   }
-  if (p.id.startsWith("resistor:") || p.id.startsWith("jumper:")) {
+  if (p.id.startsWith("resistor:") || p.id.startsWith("jumper:") || p.id.startsWith("diode:")) {
     // primero el agujero que está realmente bajo el cursor (el rayo cortando la superficie)
     const onBoard = holeUnderRay();
     if (onBoard) return { kind: "hole", hole: onBoard };
-    const holes = p.id.startsWith("resistor:") ? bb.resistorHoles(p.id.slice(9)) : (() => {
-      const o = bb.jumperObjs.get(p.id.slice(7));
-      return o ? [o.def.a, o.def.b] : null;
-    })();
+    const holes = p.id.startsWith("resistor:")
+      ? bb.resistorHoles(p.id.slice(9))
+      : p.id.startsWith("diode:")
+        ? bb.diodeHoles(p.id.slice(6))
+        : (() => {
+            const o = bb.jumperObjs.get(p.id.slice(7));
+            return o ? [o.def.a, o.def.b] : null;
+          })();
     return holes ? { kind: "hole", hole: nearestOf(holes, p.hit.point) } : null;
   }
   if (p.id.startsWith("psu:post:")) return { kind: "post", post: p.id.slice(9) as PsuPost };
@@ -289,6 +320,14 @@ const picker = new Picker(camera, world.renderer.domElement, world.controls, [dm
         .join(" · ");
       return `<b>${part.id}</b> ${formatSI(s.nominal, "Ω")} ±${s.tolerance * 100} % · ${s.power} W<br><span class="k">${bands}</span><br>${part.tempC.toFixed(0)} °C${part.state !== "ok" ? ` · <b>${part.state.toUpperCase()}</b>` : ""}`;
     }
+    if (id.startsWith("diode:")) {
+      const part = bench.diodes.get(id.slice(6))!;
+      const [ha, hk] = bb.diodeHoles(part.id) ?? ["", ""];
+      const m = part.model;
+      const legs = m.led ? `Ánodo (pata larga) en ${ha} · cátodo (lado plano) en ${hk}` : `Ánodo en ${ha} · cátodo (banda) en ${hk}`;
+      const state = part.state === "quemado" ? " · <b>QUEMADO</b>" : part.reversed ? " · <b>al revés</b>" : "";
+      return `<b>${part.id}</b> ${DIODE_LABEL[part.type]}${m.led ? " 5 mm" : " · 1 A / 1000 V"}${state}<br><span class="k">${legs}</span><br>${part.tempC.toFixed(0)} °C · máx. ${formatSI(m.ifMax, "A")}`;
+    }
     if (id.startsWith("jumper:")) {
       const j = id.slice(7);
       return bench.jumperPresent.get(j) ? `Puente <b>${j}</b><br><span class="k">${TAP}: quitarlo (abre el circuito)</span>` : `Puente <b>${j}</b> (quitado)<br><span class="k">${TAP}: volver a ponerlo</span>`;
@@ -300,6 +339,7 @@ const picker = new Picker(camera, world.renderer.domElement, world.controls, [dm
         RANGE: "RANGE: rango manual (cada pulsación sube un rango; al final vuelve a AUTO)",
         HOLD: "HOLD: congela la lectura",
         REL: "REL Δ: medición relativa (resta la lectura actual, útil para anular la resistencia de las puntas)",
+        SELECT: "SELECT: en la posición Ω alterna Ω → ▶︎| prueba de diodos → ·))) continuidad",
       };
       return d[b];
     }
@@ -343,7 +383,8 @@ const picker = new Picker(camera, world.renderer.domElement, world.controls, [dm
       audio.click();
     } else if (id === "psu:output") toggleOutput();
     else if (id.startsWith("jumper:")) toggleJumper(id.slice(7));
-    else if (id.startsWith("resistor:")) panel.selectResistor(id.slice(9));
+    else if (id.startsWith("resistor:")) panel.selectPart(id.slice(9));
+    else if (id.startsWith("diode:")) panel.selectPart(id.slice(6));
     void ev;
   },
   wantsWheel(p) {
@@ -431,11 +472,20 @@ function computeHint(): string {
     );
   if (d.leadAlert) return w("<b>LEAd</b>: la punta roja está en una borna de corriente pero la llave no está en ese modo. Así el multímetro es un <b>cortocircuito</b> entre las puntas.");
   if ((d.dial === "mA" && d.fuseMa.blown) || (d.dial === "A" && d.fuseA.blown)) return w("El fusible de esa borna está quemado: el multímetro va a marcar 0. Cambialo en el panel.");
+  const hot = [...b.diodes.values()].find((p) => p.state === "ok" && p.model.led && p.current > p.model.ifMax);
+  if (hot) return w(`<b>${hot.id}</b> conduce ${formatSI(hot.current, "A", 2)} y su máximo es ${formatSI(hot.model.ifMax, "A")}: se está calentando (${hot.tempC.toFixed(0)} °C).`);
+  const burnt = [...b.diodes.values()].find((p) => p.state === "quemado");
+  if (burnt) return w(`<b>${burnt.id}</b> está quemado (abierto). Reemplazalo en el panel de componentes.`);
   if ((d.dial === "mA" || d.dial === "A") && d.red === "VOhm") return t(`Para medir corriente pasá la punta roja a la borna <b>${d.dial === "A" ? "10A" : "mA"}</b>.`);
-  if ((d.dial === "mA" || d.dial === "A") && [...b.jumperPresent.values()].every(Boolean))
+  if ((d.dial === "mA" || d.dial === "A") && !b.jumperRemoved())
     return t(`El amperímetro va en <b>serie</b>: quitá un puente (${TAP.toLowerCase()} sobre él) y apoyá las puntas en los dos agujeros que quedaron sueltos.`);
   if ((d.dial === "OHM" || d.dial === "CONT") && b.psu.output) return w("Estás midiendo resistencia con la fuente encendida: la lectura no es válida. Apagá la salida (OUTPUT).");
-  if (d.dial === "OHM" && b.probes.red && b.probes.black && [...b.jumperPresent.values()].every(Boolean))
+  if (d.dial === "DIODE" && b.psu.output) return w("La prueba de diodos se hace con el circuito <b>sin alimentar</b>: apagá la salida (OUTPUT).");
+  if (d.dial === "DIODE")
+    return t(
+      "<b>▶︎| Prueba de diodos</b>: el multímetro inyecta 1 mA. Punta roja en el ánodo y negra en el cátodo: marca la caída en directa (≈ 0,55 V un diodo de silicio, 1,6–2,7 V un LED, que además se prende apenas). Al revés marca <b>OL</b>.",
+    );
+  if (d.dial === "OHM" && b.probes.red && b.probes.black && b.jumpersAsBuilt())
     return t("Medir un resistor <b>en el circuito</b> incluye los caminos en paralelo. Para medirlo solo, abrí los puentes que lo conectan al resto.");
   if (d.dial === "VAC") return t("En V~ (alterna) una tensión continua se lee ≈ 0: el instrumento bloquea la componente DC.");
   if (d.dial === "OFF") return t(IS_TOUCH ? "Encendé el multímetro: tocá la llave del lado derecho para girarla (o elegí la función en el panel)." : "Encendé el multímetro girando la llave (clic o rueda sobre ella).");
@@ -482,10 +532,13 @@ function stepFrame(dt: number): void {
   dmm3d.update(bench.dmm.display, bench.dmm.dial, bench.dmm.red, dt, bench.time);
   psu3d.update(bench.psu, bench.time);
   for (const part of bench.parts.values()) bb.syncResistor(part);
+  for (const part of bench.diodes.values()) bb.syncDiode(part);
+  bb.updateLeds(bench.diodes);
   for (const [id, present] of bench.jumperPresent) bb.setJumper(id, present);
-  bb.setSmoke(
-    [...bench.parts.values()].filter((p) => p.state === "humo" || (p.state === "quemado" && p.tempC > 120)).map((p) => bb.resistorCenterWorld(p.id)!),
-  );
+  bb.setSmoke([
+    ...[...bench.parts.values()].filter((p) => p.state === "humo" || (p.state === "quemado" && p.tempC > 120)).map((p) => bb.resistorCenterWorld(p.id)!),
+    ...[...bench.diodes.values()].filter((p) => p.state === "quemado" && p.tempC > 90).map((p) => bb.diodeCenterWorld(p.id)!),
+  ]);
   bb.tick(dt);
 
   for (const c of ["red", "black"] as ProbeColor[]) {

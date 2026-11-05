@@ -1,15 +1,26 @@
 import type { Netlist, Solution } from "./mna";
 import { Rng, hashSeed } from "./rng";
 
-export type Dial = "OFF" | "VAC" | "VDC" | "mVDC" | "OHM" | "CONT" | "mA" | "A";
-/** Orden físico de la llave selectora (sentido horario). */
-export const DIAL_POSITIONS: Dial[] = ["OFF", "VAC", "VDC", "mVDC", "OHM", "CONT", "mA", "A"];
+/** Función elegida en el multímetro (posición de la llave + SELECT). */
+export type Dial = "OFF" | "VAC" | "VDC" | "mVDC" | "OHM" | "DIODE" | "CONT" | "mA" | "A";
+/**
+ * Posiciones físicas de la llave selectora (sentido horario). Como en muchos multímetros reales,
+ * Ω, prueba de diodos y continuidad comparten una posición y se alternan con el botón SELECT.
+ */
+export const DIAL_POSITIONS: Dial[] = ["OFF", "VAC", "VDC", "mVDC", "OHM", "mA", "A"];
+/** Funciones de la posición Ω, en el orden en que las recorre SELECT. */
+export const SELECT_GROUP: Dial[] = ["OHM", "DIODE", "CONT"];
+/** Todas las funciones, en el orden de la llave. */
+export const DIAL_FUNCTIONS: Dial[] = ["OFF", "VAC", "VDC", "mVDC", "OHM", "DIODE", "CONT", "mA", "A"];
+/** Posición de la llave en la que está una función. */
+export const positionOf = (d: Dial): Dial => (SELECT_GROUP.includes(d) ? "OHM" : d);
 export const DIAL_LABEL: Record<Dial, string> = {
   OFF: "OFF",
   VAC: "V~",
   VDC: "V⎓",
   mVDC: "mV⎓",
   OHM: "Ω",
+  DIODE: "▶\uFE0E|",
   CONT: "·)))",
   mA: "mA⎓",
   A: "A⎓",
@@ -52,6 +63,8 @@ export const RANGES: Record<Exclude<Dial, "OFF">, Range[]> = {
     R(60e6, 1e4, "MΩ", 1e6, 1.5, 3),
   ],
   CONT: [R(600, 0.1, "Ω", 1, 0.8, 3)],
+  // prueba de diodos: 1 mA de prueba, muestra la caída hasta 3,000 V (más arriba, OL)
+  DIODE: [R(3, 1e-3, "V", 1, 1.5, 3, 3000)],
   mA: [R(0.06, 1e-5, "mA", 1e-3, 0.8, 3), R(0.6, 1e-4, "mA", 1e-3, 0.8, 3)],
   A: [R(6, 1e-3, "A", 1, 1.2, 3), R(10, 1e-2, "A", 1, 1.2, 3, 1000)],
 };
@@ -98,6 +111,8 @@ export interface DmmDisplay {
   rel: boolean;
   beep: boolean;
   continuity: boolean;
+  /** Prueba de diodos (indicador ▶|). */
+  diode: boolean;
   /** Barra analógica 0..1 */
   bar: number;
   /** Valor mostrado en unidades base (null si OL / apagado / alerta). */
@@ -117,6 +132,7 @@ const EMPTY: DmmDisplay = {
   rel: false,
   beep: false,
   continuity: false,
+  diode: false,
   bar: 0,
   value: null,
   baseUnit: "",
@@ -135,6 +151,8 @@ export const NODE = {
  * Multímetro digital de 6000 cuentas, autorango, modelado eléctricamente:
  * - V: 10 MΩ entre VΩ y COM (provoca el efecto de carga real).
  * - Ω: medición ratiométrica con fuente de prueba de 1 V y resistencia de referencia por rango.
+ * - ▶|: fuente de prueba de 1 mA con tensión a circuito abierto limitada a ≈ 3,2 V (un diodo de
+ *   recorte contra 2,6 V); muestra la caída en directa y OL en inversa o con las puntas abiertas.
  * - mA: shunt + fusible 440 mA (caída 1,8 mV/mA). A: shunt + fusible 11 A (30 mV/A).
  * Las bornas mA y A tienen el shunt SIEMPRE conectado: medir tensión con la punta en la borna
  * de corriente es un cortocircuito, como en la vida real.
@@ -150,6 +168,8 @@ export class Multimeter {
   readonly rMa = 1.8;
   readonly rA = 0.03;
   readonly ohmVs = 1.0;
+  readonly diodeTestA = 1e-3;
+  readonly diodeClampV = 2.6;
   readonly fuseMa = new Fuse(0.44, 0.5, "F 440 mA / 1000 V");
   readonly fuseA = new Fuse(11, 10, "F 11 A / 1000 V");
   display: DmmDisplay = { ...EMPTY };
@@ -182,10 +202,16 @@ export class Multimeter {
     this.relRef = null;
     this.updateTimer = 0;
   }
+  /** Gira la llave `step` posiciones; al llegar a la posición Ω arranca en Ω, como al encenderlo. */
   rotate(step: number): void {
-    const i = DIAL_POSITIONS.indexOf(this.dial);
+    const i = DIAL_POSITIONS.indexOf(positionOf(this.dial));
     const j = Math.min(DIAL_POSITIONS.length - 1, Math.max(0, i + step));
-    this.setDial(DIAL_POSITIONS[j]);
+    if (j !== i) this.setDial(DIAL_POSITIONS[j]);
+  }
+  /** SELECT: alterna las funciones que comparten la posición de la llave (Ω → ▶| → ·))). */
+  pressSelect(): void {
+    const g = SELECT_GROUP.indexOf(this.dial);
+    if (g >= 0) this.setDial(SELECT_GROUP[(g + 1) % SELECT_GROUP.length]);
   }
   pressRange(): void {
     const n = this.ranges().length;
@@ -228,6 +254,10 @@ export class Multimeter {
     } else if (this.ohmMode) {
       net.v("dmm:ohmV", "dmm:ohmSrc", NODE.COM, this.ohmVs);
       net.r("dmm:rref", "dmm:ohmSrc", NODE.VOhm, this.rref(Math.max(0, ohmRangeIdx)));
+    } else if (this.dial === "DIODE") {
+      net.i("dmm:diodeI", NODE.COM, NODE.VOhm, this.diodeTestA);
+      net.v("dmm:clampV", "dmm:clamp", NODE.COM, this.diodeClampV);
+      net.d("dmm:clampD", NODE.VOhm, "dmm:clamp", { is: 1e-14, n: 1, rs: 0 });
     }
     if (!this.fuseMa.blown) net.r("dmm:shMa", NODE.mA, NODE.COM, this.rMa);
     if (!this.fuseA.blown) net.r("dmm:shA", NODE.A, NODE.COM, this.rA);
@@ -242,6 +272,7 @@ export class Multimeter {
     switch (this.dial) {
       case "VDC":
       case "mVDC":
+      case "DIODE":
         return sol.vab(NODE.VOhm, NODE.COM);
       case "VAC":
         return 0; // señal continua pura: acoplamiento de AC la bloquea
@@ -292,7 +323,7 @@ export class Multimeter {
     this.updateTimer = 0.33;
 
     const ranges = this.ranges();
-    const acdc = this.dial === "VAC" ? "AC" : this.dial === "OHM" || this.dial === "CONT" ? "" : "DC";
+    const acdc = this.dial === "VAC" ? "AC" : this.ohmMode || this.dial === "DIODE" ? "" : "DC";
     const baseUnit = this.dial === "mA" || this.dial === "A" ? "A" : this.ohmMode ? "Ω" : "V";
 
     if (this.leadAlert) {
@@ -350,11 +381,12 @@ export class Multimeter {
       text,
       unit: r.unit,
       acdc,
-      auto: this.auto,
+      auto: this.auto && ranges.length > 1, // con un solo rango (▶|, ·))), mV) no hay autorango
       hold: false,
       rel: this.relRef !== null,
       beep,
       continuity,
+      diode: this.dial === "DIODE",
       bar: ol ? 1 : Math.min(1, Math.abs(valueShown) / (r.maxCounts * r.res)),
       value: ol ? null : valueShown,
       baseUnit,

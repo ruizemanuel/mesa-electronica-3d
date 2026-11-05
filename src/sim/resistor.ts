@@ -69,6 +69,8 @@ export function colorBands(nominal: number, tolerance: 0.05 | 0.01): BandColor[]
 /** Formato de ingeniería con coma decimal (es-AR): 4,7 kΩ */
 export function formatSI(value: number, unit: string, digits = 3): string {
   if (!isFinite(value)) return `∞ ${unit}`;
+  // por debajo de 1 fA / 1 fV / 1 fW es ruido numérico (gmin), no una magnitud física
+  if (Math.abs(value) < 1e-15) value = 0;
   const abs = Math.abs(value);
   const prefixes: [number, string][] = [
     [1e6, "M"],
@@ -77,6 +79,7 @@ export function formatSI(value: number, unit: string, digits = 3): string {
     [1e-3, "m"],
     [1e-6, "µ"],
     [1e-9, "n"],
+    [1e-12, "p"],
   ];
   let [scale, p] = prefixes[prefixes.length - 1];
   for (const [s, pr] of prefixes) {

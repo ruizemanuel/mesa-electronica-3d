@@ -296,15 +296,42 @@ button.output.on {
   margin-right: 2px;
 }
 
-.resistor {
+.resistor,
+.part {
   background: var(--panel-2);
   border: 1px solid var(--line);
   border-radius: 9px;
   padding: 8px 10px;
   margin-bottom: 8px;
 }
-.resistor.selected {
+.resistor.selected,
+.part.selected {
   border-color: var(--accent);
+}
+/* símbolo del componente: LED (círculo del color de su luz) o diodo axial (cuerpo negro con banda) */
+.dsym {
+  width: 26px;
+  height: 12px;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #1b1b1d 0 72%, #c9ccd1 72% 86%, #1b1b1d 86%);
+  border: 1px solid #3a3e46;
+  flex: none;
+}
+.dsym.led {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 40% 35%, #fff8 0 18%, var(--c) 45%);
+  border-color: color-mix(in srgb, var(--c) 60%, #000);
+}
+.dctl {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px;
+}
+.dctl select {
+  padding: 5px 6px;
+  font-size: 12px;
 }
 .rhead {
   display: flex;
@@ -399,6 +426,59 @@ td.mono {
 }
 .calc select {
   font-size: 12px;
+}
+.calc.iv {
+  margin-top: 16px;
+}
+.calc.iv input {
+  width: 80px;
+}
+.iv-pick {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin: 8px 0;
+}
+.iv-pick label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 11.5px;
+  min-width: 0;
+}
+.iv-pick select {
+  width: 100%;
+}
+.iv-chart {
+  margin-top: 8px;
+  background: #0c0d0f;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 4px 2px 0;
+}
+.iv-chart svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.iv-legend {
+  display: flex;
+  gap: 12px;
+  margin-top: 8px;
+  font-size: 11.5px;
+}
+.iv-legend:empty {
+  display: none;
+}
+.iv-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.row.buttons button.select {
+  border-color: #2f6fd6;
+  color: #9cc3ff;
 }
 .result {
   margin-top: 6px;

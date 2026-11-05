@@ -1,9 +1,11 @@
 import type { Bench } from "../sim/bench";
 import { CIRCUITS } from "../sim/circuits";
-import { DIAL_LABEL, DIAL_POSITIONS, type Dial, type Jack } from "../sim/dmm";
+import { DIODE_TYPES, type DiodeType } from "../sim/diode";
+import { DIAL_FUNCTIONS, DIAL_LABEL, type Dial, type Jack } from "../sim/dmm";
 import { colorBands, eSeriesValues, formatSI, type PowerRating, type ResistorSpec } from "../sim/resistor";
 import { VIEWS } from "../scene/world";
 import { IS_TOUCH } from "../input";
+import { DIODE_LABEL, IV_MAX_SERIES, ivChartSvg, ivLegend, ivSeries, type IvPoint } from "./ivcurve";
 
 export interface PanelActions {
   loadCircuit(id: string): void;
@@ -11,7 +13,10 @@ export interface PanelActions {
   toggleJumper(id: string): void;
   setResistor(id: string, spec: ResistorSpec): void;
   replaceResistor(id: string): void;
-  dmmButton(b: "RANGE" | "HOLD" | "REL"): void;
+  setDiode(id: string, type: DiodeType): void;
+  flipDiode(id: string): void;
+  replaceDiode(id: string): void;
+  dmmButton(b: "SELECT" | "RANGE" | "HOLD" | "REL"): void;
   setDial(d: Dial): void;
   setJack(j: Jack): void;
   setPsu(v: number | null, i: number | null): void;
@@ -38,6 +43,7 @@ const QTY: Record<Dial, string> = {
   VDC: "Tensión DC",
   mVDC: "Tensión DC",
   OHM: "Resistencia",
+  DIODE: "Prueba de diodos",
   CONT: "Continuidad",
   mA: "Corriente DC",
   A: "Corriente DC",
@@ -51,13 +57,15 @@ const MOUSE_HELP = `
           <li><b>Llave del multímetro</b>: clic izq./der. o rueda</li>
           <li><b>Perillas de la fuente</b>: rueda o arrastrar (Shift ×10, Alt ×0,1)</li>
           <li><b>Puntas</b>: clic en la punta y luego en un agujero, una pata o un borne. <kbd>Esc</kbd> cancela.</li>
-          <li><b>Puentes</b>: clic para quitar/poner</li>`;
+          <li><b>Puentes</b>: clic para quitar/poner</li>
+          <li><b>SELECT</b> (multímetro): en la posición Ω alterna Ω → ▶︎| diodos → ·))) continuidad</li>`;
 const TOUCH_HELP = `
           <li><b>Rotar</b>: arrastrar con un dedo · <b>Zoom y desplazar</b>: dos dedos</li>
           <li><b>Llave del multímetro</b>: tocá a la izquierda o a la derecha de la llave</li>
           <li><b>Perillas de la fuente</b>: arrastrá hacia arriba o abajo (o escribí el valor en el panel)</li>
           <li><b>Puntas</b>: tomá una punta, apoyá el dedo y arrastrá; la mira va por encima del dedo y la punta se apoya al soltar</li>
-          <li><b>Puentes</b>: tocalos para quitarlos o ponerlos</li>`;
+          <li><b>Puentes</b>: tocalos para quitarlos o ponerlos</li>
+          <li><b>SELECT</b> (multímetro): en la posición Ω alterna Ω → ▶︎| diodos → ·))) continuidad</li>`;
 
 const h = <K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Record<string, string> = {}, html = ""): HTMLElementTagNameMap[K] => {
   const el = document.createElement(tag);
@@ -73,7 +81,12 @@ export class Panel {
   private showTheory = false;
   private showTruth = false;
   private els: Record<string, HTMLElement> = {};
-  private selectedResistor: string | null = null;
+  private selectedPart: string | null = null;
+  private iv: IvPoint[] = [];
+  private ivSeq = 1;
+  private ivMsg = "";
+  /** Cantidad de anotaciones la última vez que se armaron los selectores de la curva. */
+  private ivSeenNotes = 0;
 
   constructor(
     private readonly bench: Bench,
@@ -112,14 +125,14 @@ export class Panel {
         <div class="readout" id="dmmReadout">—</div>
         <div class="row">
           <label class="lbl">Llave</label>
-          <select id="dial">${DIAL_POSITIONS.map((d) => `<option value="${d}">${DIAL_LABEL[d]}${d === "OFF" ? "" : " — " + QTY[d]}</option>`).join("")}</select>
+          <select id="dial">${DIAL_FUNCTIONS.map((d) => `<option value="${d}">${DIAL_LABEL[d]}${d === "OFF" ? "" : " — " + QTY[d]}</option>`).join("")}</select>
         </div>
         <div class="row">
           <label class="lbl">Punta roja en</label>
           <div class="seg" id="jack">${(["VOhm", "mA", "A"] as Jack[]).map((j) => `<button data-jack="${j}">${JACK_LABEL[j]}</button>`).join("")}</div>
         </div>
         <div class="row buttons">
-          <button data-dmm="RANGE">RANGE</button><button data-dmm="HOLD">HOLD</button><button data-dmm="REL">REL Δ</button>
+          <button data-dmm="SELECT" class="select">SELECT</button><button data-dmm="RANGE">RANGE</button><button data-dmm="HOLD">HOLD</button><button data-dmm="REL">REL Δ</button>
         </div>
         <div class="row probes">
           <button data-probe="red" class="probe red">Tomar punta roja <kbd>R</kbd></button>
@@ -143,6 +156,7 @@ export class Panel {
       <section>
         <h2>Componentes</h2>
         <div id="resistors"></div>
+        <div id="diodes"></div>
         <h3>Puentes <small>(quitá uno para abrir el circuito y medir corriente en serie)</small></h3>
         <div class="jumpers" id="jumpers">${c.jumpers.map((j) => `<button data-jumper="${j.id}" style="--wire:${j.color}">${j.id}</button>`).join("")}</div>
       </section>
@@ -159,6 +173,26 @@ export class Panel {
           </div>
           <div class="result" id="calcP">Anotá una tensión y una corriente.</div>
         </div>
+        ${
+          c.diodes?.length
+            ? `<div class="calc iv">
+          <h3>Curva I-V</h3>
+          <div class="iv-pick">
+            <label>Tensión del diodo <select id="ivV"></select></label>
+            <label>Corriente <select id="ivI"></select></label>
+          </div>
+          <div class="row two">
+            <label>R en serie <input id="ivR" type="number" min="0" step="0.01"> Ω <span class="small">(medila y corregí el valor)</span></label>
+          </div>
+          <button id="ivAdd" class="primary">Agregar punto a la curva</button>
+          <div class="small" id="ivMsg"></div>
+          <div class="iv-legend" id="ivLegend"></div>
+          <div class="iv-chart" id="ivChart"></div>
+          <table class="notes"><thead><tr><th>Componente</th><th>V</th><th>I</th><th>De</th><th></th></tr></thead><tbody id="ivPts"></tbody></table>
+          <p class="small">La línea punteada (con «Ver valores teóricos») es el modelo nominal del componente.</p>
+        </div>`
+            : ""
+        }
       </section>
 
       <section>
@@ -177,7 +211,7 @@ export class Panel {
       </section>`;
 
     const $ = (id: string) => this.root.querySelector<HTMLElement>(`#${id}`)!;
-    for (const id of ["hint", "dmmReadout", "psuReadout", "probeWhere", "fuses", "resistors", "notes", "calcV", "calcI", "calcP", "theory", "output", "vset", "iset", "dial", "mute"]) this.els[id] = $(id);
+    for (const id of ["hint", "dmmReadout", "psuReadout", "probeWhere", "fuses", "resistors", "diodes", "notes", "calcV", "calcI", "calcP", "theory", "output", "vset", "iset", "dial", "mute"]) this.els[id] = $(id);
 
     $("circuit").addEventListener("change", (e) => this.act.loadCircuit((e.target as HTMLSelectElement).value));
     this.root.querySelectorAll<HTMLButtonElement>("[data-view]").forEach((btn) => btn.addEventListener("click", () => this.act.view(btn.dataset.view!)));
@@ -201,6 +235,7 @@ export class Panel {
     $("showTheory").addEventListener("change", (e) => {
       this.showTheory = (e.target as HTMLInputElement).checked;
       this.updateTheory();
+      this.renderIv();
     });
     $("showTruth").addEventListener("change", (e) => {
       this.showTruth = (e.target as HTMLInputElement).checked;
@@ -209,9 +244,46 @@ export class Panel {
     this.els.calcV.addEventListener("change", () => this.updateCalc());
     this.els.calcI.addEventListener("change", () => this.updateCalc());
 
+    const ivAdd = this.root.querySelector("#ivAdd");
+    const ivIds = ["ivV", "ivI", "ivR", "ivMsg", "ivLegend", "ivChart", "ivPts"];
+    for (const id of ivIds) delete this.els[id]; // los del circuito anterior ya no están en la página
+    if (ivAdd) {
+      for (const id of ivIds) this.els[id] = $(id);
+      const r1 = c.resistors[0]?.spec.nominal;
+      if (r1) (this.els.ivR as HTMLInputElement).value = String(r1);
+      ivAdd.addEventListener("click", () => this.addIvPoint());
+    }
+
     this.renderResistors();
+    this.renderDiodes();
     this.renderNotes();
+    this.renderIv();
     this.update();
+  }
+
+  private renderDiodes(): void {
+    const wrap = this.els.diodes;
+    wrap.innerHTML = "";
+    for (const d of this.bench.circuit.diodes ?? []) {
+      const part = this.bench.diodes.get(d.id)!;
+      const m = part.model;
+      const row = h("div", { class: "part diode", "data-did": d.id });
+      row.innerHTML = `
+        <div class="rhead"><b>${d.id}</b><span class="dsym${m.led ? " led" : ""}" style="--c:${m.light ?? "#1b1b1d"}" title="${m.name}"></span><span class="small" data-where></span><span class="rstate" data-state></span></div>
+        <div class="dctl">
+          <select data-k="type">${DIODE_TYPES.map((t) => `<option value="${t}" ${t === part.type ? "selected" : ""}>${DIODE_LABEL[t]}${t === "1N4007" ? " (rectificador)" : " 5 mm"}</option>`).join("")}</select>
+          <button class="ghost small" data-flip>Dar vuelta</button>
+        </div>
+        <div class="rinfo"><span data-temp></span><button class="ghost small" data-replace>Reemplazar</button></div>`;
+      row.querySelector("select")!.addEventListener("change", (e) => {
+        this.act.setDiode(d.id, (e.target as HTMLSelectElement).value as DiodeType);
+        this.renderDiodes();
+      });
+      row.querySelector("[data-flip]")!.addEventListener("click", () => this.act.flipDiode(d.id));
+      row.querySelector("[data-replace]")!.addEventListener("click", () => this.act.replaceDiode(d.id));
+      if (d.id === this.selectedPart) row.classList.add("selected");
+      wrap.appendChild(row);
+    }
   }
 
   private renderResistors(): void {
@@ -245,15 +317,17 @@ export class Panel {
         }),
       );
       row.querySelector("[data-replace]")!.addEventListener("click", () => this.act.replaceResistor(r.id));
-      if (r.id === this.selectedResistor) row.classList.add("selected");
+      if (r.id === this.selectedPart) row.classList.add("selected");
       wrap.appendChild(row);
     }
   }
 
-  selectResistor(id: string): void {
-    this.selectedResistor = id;
+  /** Resalta un componente (resistor o diodo) en el panel. */
+  selectPart(id: string): void {
+    this.selectedPart = id;
     this.renderResistors();
-    this.root.querySelector(`.resistor[data-id="${id}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    this.renderDiodes();
+    this.root.querySelector(`.resistor[data-id="${id}"], .diode[data-did="${id}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" });
   }
 
   syncPsuInputs(): void {
@@ -307,6 +381,74 @@ export class Panel {
     if ([...si.options].some((o) => o.value === pi)) si.value = pi;
     else if (si.options.length) si.selectedIndex = si.options.length - 1;
     this.updateCalc();
+    this.renderIvSelects();
+  }
+
+  /** Opciones de la curva I-V: V del diodo (lecturas de tensión) e I (de corriente, o V_R ÷ R). */
+  private renderIvSelects(): void {
+    const sv = this.els.ivV as HTMLSelectElement | undefined;
+    const si = this.els.ivI as HTMLSelectElement | undefined;
+    if (!sv || !si) return;
+    const volts = this.notes.filter((n) => n.baseUnit === "V" && n.value !== null);
+    const amps = this.notes.filter((n) => n.baseUnit === "A" && n.value !== null);
+    // con anotaciones nuevas se proponen las últimas (Vd y después V_R); si no, se respeta lo elegido
+    const grew = this.notes.length > this.ivSeenNotes;
+    this.ivSeenNotes = this.notes.length;
+    const pv = grew ? "" : sv.value;
+    const pi = grew ? "" : si.value;
+    sv.innerHTML = volts.map((n) => `<option value="${n.n}">#${n.n} · ${n.text}</option>`).join("");
+    si.innerHTML =
+      amps.map((n) => `<option value="i:${n.n}">#${n.n} · ${n.text}</option>`).join("") +
+      volts.map((n) => `<option value="v:${n.n}">#${n.n} · ${n.text} ÷ R</option>`).join("");
+    // por defecto: si lo último anotado es una corriente, va directo; si es una tensión, es V_R y la anterior es Vd
+    const last = [...amps, ...volts].sort((a, b) => b.n - a.n)[0];
+    const lastIsAmp = last?.baseUnit === "A";
+    const vd = lastIsAmp ? volts[volts.length - 1] : volts[volts.length - 2] ?? volts[volts.length - 1];
+    if ([...sv.options].some((o) => o.value === pv)) sv.value = pv;
+    else if (vd) sv.value = String(vd.n);
+    if ([...si.options].some((o) => o.value === pi)) si.value = pi;
+    else if (last) si.value = `${lastIsAmp ? "i" : "v"}:${last.n}`;
+  }
+
+  private addIvPoint(): void {
+    const sv = this.els.ivV as HTMLSelectElement;
+    const si = this.els.ivI as HTMLSelectElement;
+    const vNote = this.notes.find((n) => n.n === Number(sv.value));
+    const [kind, num] = si.value.split(":");
+    const iNote = this.notes.find((n) => n.n === Number(num));
+    const R = Number((this.els.ivR as HTMLInputElement).value);
+    const diode = [...this.bench.diodes.values()][0];
+    if (!vNote || vNote.value === null || !iNote || iNote.value === null || !diode) {
+      this.ivMsg = "Anotá la tensión del diodo y la corriente (o la tensión sobre R) en el cuaderno.";
+    } else if (kind === "v" && !(R > 0)) {
+      this.ivMsg = "Para calcular I = V_R / R escribí el valor de R.";
+    } else if (kind === "v" && vNote.n === iNote.n) {
+      this.ivMsg = "Elegí dos lecturas distintas: la del diodo y la de la resistencia.";
+    } else if (!ivSeries(this.iv).some((s) => s.type === diode.type) && ivSeries(this.iv).length >= IV_MAX_SERIES) {
+      this.ivMsg = `La curva compara hasta ${IV_MAX_SERIES} componentes: borrá los puntos de alguno.`;
+    } else {
+      const i = kind === "v" ? Math.abs(iNote.value) / R : Math.abs(iNote.value);
+      this.iv.push({ id: this.ivSeq++, type: diode.type, v: vNote.value, i, from: `#${vNote.n} y #${iNote.n}` });
+      this.ivMsg = "";
+    }
+    this.renderIv();
+  }
+
+  private renderIv(): void {
+    if (!this.els.ivChart) return;
+    this.els.ivMsg.textContent = this.ivMsg;
+    this.els.ivLegend.innerHTML = ivLegend(this.iv);
+    this.els.ivChart.innerHTML = ivChartSvg(this.iv, this.showTheory);
+    const body = this.els.ivPts;
+    body.innerHTML = this.iv
+      .map((p) => `<tr><td>${DIODE_LABEL[p.type]}</td><td class="mono">${formatSI(p.v, "V", 4)}</td><td class="mono">${formatSI(p.i, "A", 3)}</td><td class="small">${p.from}</td><td><button class="x" data-ivdel="${p.id}" title="Borrar">×</button></td></tr>`)
+      .join("");
+    body.querySelectorAll<HTMLButtonElement>("[data-ivdel]").forEach((btn) =>
+      btn.addEventListener("click", () => {
+        this.iv = this.iv.filter((p) => p.id !== Number(btn.dataset.ivdel));
+        this.renderIv();
+      }),
+    );
   }
 
   private updateCalc(): void {
@@ -348,8 +490,21 @@ export class Panel {
           <td>${cell(formatSI(t.p, "W", 3), formatSI(s.p, "W", 4))}</td></tr>`;
       })
       .join("");
+    const diodeRows = (b.circuit.diodes ?? [])
+      .map((d) => {
+        const t = th.diodes.find((p) => p.id === d.id)!;
+        const s = tr.diodes.find((p) => p.id === d.id)!;
+        const part = b.diodes.get(d.id)!;
+        const cell = (a: string, z: string) => `${this.showTheory ? `<span>${a}</span>` : ""}${this.showTruth ? `<span class="truth">${z}</span>` : ""}`;
+        return `<tr><td><b>${d.id}</b></td>
+          <td>${cell(DIODE_LABEL[part.type], part.state === "quemado" ? "abierto" : part.reversed ? "en inversa" : "en directa")}</td>
+          <td>${cell(formatSI(t.v, "V", 3), formatSI(s.v, "V", 4))}</td>
+          <td>${cell(formatSI(t.i, "A", 3), formatSI(s.i, "A", 4))}</td>
+          <td>${cell(formatSI(t.p, "W", 3), formatSI(s.p, "W", 3))}</td></tr>`;
+      })
+      .join("");
     const legend = `${this.showTheory ? "<span>teórico</span>" : ""}${this.showTruth ? '<span class="truth">real</span>' : ""}`;
-    el.innerHTML = `<table class="theory"><thead><tr><th></th><th>R</th><th>V</th><th>I</th><th>P</th></tr></thead><tbody>${rows}</tbody></table>
+    el.innerHTML = `<table class="theory"><thead><tr><th></th><th>R</th><th>V</th><th>I</th><th>P</th></tr></thead><tbody>${rows}${diodeRows}</tbody></table>
       <p class="small">${legend} · I total: ${this.showTheory ? formatSI(th.itotal, "A", 4) : ""} ${this.showTruth ? `<span class="truth">${formatSI(tr.itotal, "A", 5)} (${tr.mode})</span>` : ""}</p>
       ${this.showTheory && b.psu.iset < th.itotal ? `<p class="warn">Con ${formatSI(b.psu.iset, "A")} de límite la fuente va a entrar en CC (limitación de corriente).</p>` : ""}`;
   }
@@ -399,6 +554,20 @@ export class Panel {
       const p = b.sol ? b.sol.pR(part.id) : 0;
       const extra = this.showTruth ? ` · disipa ${formatSI(p, "W", 3)} de ${POWER_LABEL[part.spec.power]}` : ` · máx. ${POWER_LABEL[part.spec.power]}`;
       row.querySelector<HTMLElement>("[data-temp]")!.textContent = `${part.tempC.toFixed(0)} °C${extra}`;
+    });
+    this.root.querySelectorAll<HTMLElement>(".diode").forEach((row) => {
+      const part = b.diodes.get(row.dataset.did!);
+      if (!part) return;
+      const def = b.circuit.diodes!.find((d) => d.id === part.id)!;
+      const holes = b.diodeHoles(def);
+      const m = part.model;
+      row.querySelector<HTMLElement>("[data-where]")!.textContent = `${m.led ? "ánodo (pata larga)" : "ánodo"} ${holes.a} · cátodo ${holes.k}`;
+      const st = row.querySelector<HTMLElement>("[data-state]")!;
+      const lit = m.led && part.brightness > 0.02;
+      st.textContent = part.state === "quemado" ? "QUEMADO" : part.tempC > m.tjMax ? "¡MUY CALIENTE!" : part.reversed ? "al revés" : lit ? "encendido" : "ok";
+      st.className = `rstate ${part.state === "quemado" || part.tempC > m.tjMax ? "bad" : part.tempC > m.tjMax * 0.7 || part.reversed ? "warm" : "ok"}`;
+      const extra = this.showTruth ? ` · ${formatSI(part.current, "A", 3)} · ${formatSI(part.power, "W", 3)}` : "";
+      row.querySelector<HTMLElement>("[data-temp]")!.textContent = `${part.tempC.toFixed(0)} °C · máx. ${formatSI(m.ifMax, "A")}${extra}`;
     });
     if (this.showTheory || this.showTruth) this.updateTheory();
   }

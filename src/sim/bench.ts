@@ -1,4 +1,5 @@
-import { CIRCUITS, netOfHole, type CircuitDef } from "./circuits";
+import { CIRCUITS, netOfHole, type CircuitDef, type DiodeDef } from "./circuits";
+import { DiodePart, diodeParams, type DiodeType } from "./diode";
 import { Multimeter, NODE } from "./dmm";
 import { Netlist, solve, type Solution } from "./mna";
 import { BenchSupply, type PsuMode } from "./psu";
@@ -20,11 +21,19 @@ export interface ResistorReading {
   i: number;
   p: number;
 }
+/** Diodo: tensión y corriente de ánodo a cátodo (negativas en inversa). */
+export interface DiodeReading {
+  id: string;
+  v: number;
+  i: number;
+  p: number;
+}
 
 export type BenchEvent =
   | { kind: "fuse"; which: "mA" | "A" }
   | { kind: "burn"; id: string }
   | { kind: "smoke"; id: string }
+  | { kind: "diodeBurn"; id: string; peak: number; led: boolean }
   | { kind: "cc"; on: boolean };
 
 export class Bench {
@@ -32,6 +41,7 @@ export class Bench {
   readonly dmm: Multimeter;
   circuit: CircuitDef = CIRCUITS[0];
   readonly parts = new Map<string, ResistorPart>();
+  readonly diodes = new Map<string, DiodePart>();
   readonly jumperPresent = new Map<string, boolean>();
   readonly probes: Record<ProbeColor, ProbeTarget> = { red: null, black: null };
   time = 0;
@@ -39,6 +49,8 @@ export class Bench {
   private listeners: ((e: BenchEvent) => void)[] = [];
   private rngParts: Rng;
   private lastMode: PsuMode = "OFF";
+  /** Tensiones de juntura de la última solución: arrancan Newton-Raphson cerca del resultado. */
+  private guess = new Map<string, number>();
 
   constructor(seed = 20261104) {
     this.psu = new BenchSupply(new Rng(hashSeed("psu", seed)));
@@ -60,8 +72,11 @@ export class Bench {
     this.circuit = def;
     this.parts.clear();
     for (const r of def.resistors) this.parts.set(r.id, new ResistorPart(r.id, { ...r.spec }, this.rngParts));
+    this.diodes.clear();
+    for (const d of def.diodes ?? []) this.diodes.set(d.id, new DiodePart(d.id, d.type, this.rngParts));
+    this.guess.clear();
     this.jumperPresent.clear();
-    for (const j of def.jumpers) this.jumperPresent.set(j.id, true);
+    for (const j of def.jumpers) this.jumperPresent.set(j.id, j.present ?? true);
     this.psu.output = false;
     this.psu.vset = def.vset;
     this.psu.iset = def.iset;
@@ -72,6 +87,32 @@ export class Bench {
 
   setResistor(id: string, spec: ResistorSpec): void {
     this.parts.get(id)?.renew(spec);
+  }
+
+  /** Coloca un diodo nuevo (del mismo tipo u otro) en el mismo lugar y orientación. */
+  setDiode(id: string, type?: DiodeType): void {
+    this.diodes.get(id)?.renew(type);
+    this.guess.delete(id);
+  }
+  /** Saca el diodo y lo vuelve a poner al revés. */
+  flipDiode(id: string): void {
+    this.diodes.get(id)?.flip();
+    this.guess.delete(id);
+  }
+
+  /** Agujeros donde quedaron el ánodo y el cátodo (según la orientación actual). */
+  diodeHoles(def: DiodeDef): { a: string; k: string } {
+    const part = this.diodes.get(def.id);
+    return part?.reversed ? { a: def.k, k: def.a } : { a: def.a, k: def.k };
+  }
+
+  /** ¿Los puentes están como en el circuito original? (ninguno quitado ni agregado) */
+  jumpersAsBuilt(): boolean {
+    return this.circuit.jumpers.every((j) => this.jumperPresent.get(j.id) === (j.present ?? true));
+  }
+  /** ¿Se quitó algún puente que venía puesto? (para medir corriente en serie) */
+  jumperRemoved(): boolean {
+    return this.circuit.jumpers.some((j) => (j.present ?? true) && !this.jumperPresent.get(j.id));
   }
 
   netOf(t: ProbeTarget, free: string): string {
@@ -98,6 +139,12 @@ export class Bench {
       const part = this.parts.get(r.id)!;
       net.r(r.id, netOfHole(r.a), netOfHole(r.b), ideal ? part.spec.nominal : part.ohms);
     }
+    for (const d of this.circuit.diodes ?? []) {
+      const part = this.diodes.get(d.id)!;
+      if (!ideal && part.state === "quemado") continue; // abierto
+      const h = this.diodeHoles(d);
+      net.d(d.id, netOfHole(h.a), netOfHole(h.k), ideal ? diodeParams(part.model) : part.params());
+    }
     if (ideal) {
       if (psuMode !== "OFF") net.v("psu:V", "psu+", "psu-", this.psu.vset);
     } else {
@@ -113,13 +160,14 @@ export class Bench {
 
   /** Resuelve con la lógica CV/CC de la fuente. */
   solveAt(ohmRange: number, opts: { withDmm?: boolean } = {}): { sol: Solution; mode: PsuMode } {
+    const so = { guess: this.guess };
     if (!this.psu.output) {
-      return { sol: solve(this.build(ohmRange, "OFF", opts), GROUND), mode: "OFF" };
+      return { sol: solve(this.build(ohmRange, "OFF", opts), GROUND, undefined, so), mode: "OFF" };
     }
-    let sol = solve(this.build(ohmRange, "CV", opts), GROUND);
+    let sol = solve(this.build(ohmRange, "CV", opts), GROUND, undefined, so);
     const iout = -sol.iV("psu:V");
     if (iout > this.psu.iset) {
-      sol = solve(this.build(ohmRange, "CC", opts), GROUND);
+      sol = solve(this.build(ohmRange, "CC", opts), GROUND, undefined, so);
       return { sol, mode: "CC" };
     }
     return { sol, mode: "CV" };
@@ -130,6 +178,7 @@ export class Bench {
     this.time += dt;
     const { sol, mode } = this.solveAt(this.dmm.ohmRangeForStep());
     this.sol = sol;
+    for (const [id, v] of sol.junctionVoltages()) this.guess.set(id, v);
     const vout = sol.vab("psu+", "psu-");
     const iout = mode === "CV" ? -sol.iV("psu:V") : mode === "CC" ? this.psu.iset - vout / 1e7 : 0;
     this.psu.update(vout, iout, mode, dt);
@@ -144,6 +193,11 @@ export class Bench {
         if (part.state === "quemado") this.emit({ kind: "burn", id: r.id });
         else if (part.state === "humo") this.emit({ kind: "smoke", id: r.id });
       }
+    }
+    for (const part of this.diodes.values()) {
+      const before = part.state;
+      part.step(sol.iD(part.id), sol.pD(part.id), dt);
+      if (part.state === "quemado" && before !== "quemado") this.emit({ kind: "diodeBurn", id: part.id, peak: part.peak, led: part.model.led });
     }
     if (this.dmm.fuseMa.step(sol.iR("dmm:shMa"), dt)) this.emit({ kind: "fuse", which: "mA" });
     if (this.dmm.fuseA.step(sol.iR("dmm:shA"), dt)) this.emit({ kind: "fuse", which: "A" });
@@ -164,20 +218,26 @@ export class Bench {
       return { id: r.id, v: Math.abs(v), i: Math.abs(i), p: sol.pR(r.id) };
     });
   }
+  private diodeReadingsFrom(sol: Solution): DiodeReading[] {
+    return (this.circuit.diodes ?? []).map((d) => {
+      const h = this.diodeHoles(d);
+      return { id: d.id, v: sol.vab(netOfHole(h.a), netOfHole(h.k)), i: sol.iD(d.id), p: sol.pD(d.id) };
+    });
+  }
 
-  /** Valores teóricos: resistores nominales, fuente ideal a Vset, sin instrumento. */
-  theory(): { parts: ResistorReading[]; itotal: number; ptotal: number } {
+  /** Valores teóricos: componentes nominales (y sanos), fuente ideal a Vset, sin instrumento. */
+  theory(): { parts: ResistorReading[]; diodes: DiodeReading[]; itotal: number; ptotal: number } {
     const sol = solve(this.build(-1, "CV", { withDmm: false, ideal: true }), GROUND);
     const itotal = -sol.iV("psu:V");
-    return { parts: this.readingsFrom(sol), itotal, ptotal: itotal * this.psu.vset };
+    return { parts: this.readingsFrom(sol), diodes: this.diodeReadingsFrom(sol), itotal, ptotal: itotal * this.psu.vset };
   }
 
   /** Valores "verdaderos" del circuito real, sin el multímetro conectado. */
-  truth(): { parts: ResistorReading[]; itotal: number; vout: number; mode: PsuMode } {
+  truth(): { parts: ResistorReading[]; diodes: DiodeReading[]; itotal: number; vout: number; mode: PsuMode } {
     const { sol, mode } = this.solveAt(-1, { withDmm: false });
     const vout = sol.vab("psu+", "psu-");
     const itotal = mode === "CV" ? -sol.iV("psu:V") : mode === "CC" ? this.psu.iset : 0;
-    return { parts: this.readingsFrom(sol), itotal, vout, mode };
+    return { parts: this.readingsFrom(sol), diodes: this.diodeReadingsFrom(sol), itotal, vout, mode };
   }
 
   describeTarget(t: ProbeTarget): string {

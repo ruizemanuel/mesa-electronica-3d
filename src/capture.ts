@@ -91,6 +91,7 @@ export function installCapture(ctx: CaptureCtx): void {
     if (target.startsWith("hole:")) return bb().holeWorld(target.slice(5));
     if (target.startsWith("jumper:")) return bb().jumperMidWorld(target.slice(7));
     if (target.startsWith("resistor:")) return bb().resistorCenterWorld(target.slice(9));
+    if (target.startsWith("diode:")) return bb().diodeCenterWorld(target.slice(6));
     if (target === "dial+" || target === "dial-") {
       const knob = findTagged("dmm:dial");
       if (!knob) return null;

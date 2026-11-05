@@ -71,6 +71,8 @@ describe("Resistores", () => {
     expect(formatSI(4700, "Ω")).toBe("4,7 kΩ");
     expect(formatSI(0.00512, "A")).toBe("5,12 mA");
     expect(formatSI(2.2e6, "Ω")).toBe("2,2 MΩ");
+    expect(formatSI(-5e-12, "A")).toBe("-5 pA");
+    expect(formatSI(7e-18, "W")).toBe("0 W");
   });
 });
 

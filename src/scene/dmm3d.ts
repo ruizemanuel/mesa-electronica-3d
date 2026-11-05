@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
-import { DIAL_LABEL, DIAL_POSITIONS, type Dial, type DmmDisplay, type Jack } from "../sim/dmm";
+import { DIAL_LABEL, DIAL_POSITIONS, positionOf, type Dial, type DmmDisplay, type Jack } from "../sim/dmm";
 import { drawSevenSeg } from "./sevenseg";
 import { MM, canvasTexture, mmMapper, roundRect, shadows, std, tag, text, type CanvasTex } from "./util";
 
@@ -8,16 +8,39 @@ const FACE_W = 78;
 const FACE_H = 170;
 const LCD = { x: 0, y: 50, w: 64, h: 34 };
 const DIAL = { x: 0, y: -17, r: 17 };
-export const DMM_BUTTONS = ["RANGE", "HOLD", "REL"] as const;
+export const DMM_BUTTONS = ["SELECT", "RANGE", "HOLD", "REL"] as const;
 export type DmmButton = (typeof DMM_BUTTONS)[number];
 const BTN_Y = 24;
-const BTN_X: Record<DmmButton, number> = { RANGE: -22, HOLD: 0, REL: 22 };
+const BTN_X: Record<DmmButton, number> = { SELECT: -27, RANGE: -9, HOLD: 9, REL: 27 };
+/** Color de las funciones secundarias (las que se eligen con SELECT) y del botón. */
+const SELECT_COLOR = "#5fa2ff";
 export type JackId = Jack | "COM";
 const JACK_Y = -66;
 const JACK_X: Record<JackId, number> = { A: -27, mA: -9, COM: 9, VOhm: 27 };
 const DEPTH = 52;
 
-export const dialAngle = (d: Dial): number => THREE.MathUtils.degToRad(126 - 36 * DIAL_POSITIONS.indexOf(d));
+export const dialAngle = (d: Dial): number => THREE.MathUtils.degToRad(135 - 45 * DIAL_POSITIONS.indexOf(positionOf(d)));
+
+/** Símbolo de diodo (▶|) dibujado con trazos: los glifos ▶ se muestran como emoji en algunos celulares. */
+function diodeSymbol(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number, color: string): void {
+  ctx.save();
+  ctx.fillStyle = color;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = Math.max(1, h * 0.13);
+  ctx.beginPath();
+  ctx.moveTo(cx - h * 0.45, cy - h * 0.45);
+  ctx.lineTo(cx - h * 0.45, cy + h * 0.45);
+  ctx.lineTo(cx + h * 0.3, cy);
+  ctx.closePath();
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(cx + h * 0.36, cy - h * 0.45);
+  ctx.lineTo(cx + h * 0.36, cy + h * 0.45);
+  ctx.moveTo(cx - h * 0.8, cy);
+  ctx.lineTo(cx + h * 0.75, cy);
+  ctx.stroke();
+  ctx.restore();
+}
 
 export class Dmm3D {
   readonly group = new THREE.Group();
@@ -69,7 +92,7 @@ export class Dmm3D {
 
     // botones
     for (const b of DMM_BUTTONS) {
-      const m = new THREE.Mesh(new RoundedBoxGeometry(15 * MM, 7 * MM, 3 * MM, 3, 1.2 * MM), std(b === "REL" ? "#3c6fd1" : "#4a4e55", 0.5));
+      const m = new THREE.Mesh(new RoundedBoxGeometry(15 * MM, 7 * MM, 3 * MM, 3, 1.2 * MM), std(b === "SELECT" ? "#2f6fd6" : "#4a4e55", 0.5));
       m.position.set(BTN_X[b] * MM, BTN_Y * MM, (DEPTH / 2 + 1.2) * MM);
       tag(m, `dmm:btn:${b}`);
       this.buttons.set(b, m);
@@ -182,7 +205,7 @@ export class Dmm3D {
     text(ctx, "DM-6000", M.x(-36), M.y(74), M.s(4.2), "#f0b429", "left", 800);
     text(ctx, "TRUE RMS · 6000 CUENTAS", M.x(36), M.y(74), M.s(2.6), "#c9ccd1", "right", 600);
     // etiquetas de botones
-    for (const b of DMM_BUTTONS) text(ctx, b === "REL" ? "REL Δ" : b, M.x(BTN_X[b]), M.y(BTN_Y + 7), M.s(2.8), "#d7dade");
+    for (const b of DMM_BUTTONS) text(ctx, b === "REL" ? "REL Δ" : b, M.x(BTN_X[b]), M.y(BTN_Y + 7), M.s(2.8), b === "SELECT" ? SELECT_COLOR : "#d7dade");
     // escala de la llave
     ctx.strokeStyle = "#5a5f67";
     ctx.lineWidth = M.s(0.8);
@@ -201,7 +224,14 @@ export class Dmm3D {
       ctx.stroke();
       const rl = DIAL.r + 9.5;
       const color = d === "OFF" ? "#f0b429" : d === "mA" || d === "A" ? "#ff6b5e" : "#ffffff";
-      text(ctx, DIAL_LABEL[d], M.x(DIAL.x + Math.cos(a) * rl), M.y(DIAL.y + Math.sin(a) * rl), M.s(3.4), color, "center", 700);
+      const lx = M.x(DIAL.x + Math.cos(a) * rl);
+      const ly = M.y(DIAL.y + Math.sin(a) * rl);
+      if (d === "OHM") {
+        // Ω arriba; ▶| y ·))) (las funciones de SELECT) abajo, en el color del botón
+        text(ctx, "Ω", lx, ly - M.s(2.3), M.s(3.6), color, "center", 700);
+        diodeSymbol(ctx, lx - M.s(3.6), ly + M.s(2.1), M.s(2.6), SELECT_COLOR);
+        text(ctx, "·)))", lx + M.s(1.0), ly + M.s(2.1), M.s(2.9), SELECT_COLOR, "left", 700);
+      } else text(ctx, DIAL_LABEL[d], lx, ly, M.s(3.4), color, "center", 700);
     }
     // bornas
     const jl: Record<JackId, [string, string]> = {
@@ -222,7 +252,7 @@ export class Dmm3D {
 
   private drawLcd(d: DmmDisplay, force = false, time = 0): void {
     const blink = d.leadAlert ? Math.floor(time * 3) % 2 === 0 : true;
-    const key = JSON.stringify([d.on, d.text, d.unit, d.acdc, d.auto, d.hold, d.rel, d.continuity, Math.round(d.bar * 60), blink]);
+    const key = JSON.stringify([d.on, d.text, d.unit, d.acdc, d.auto, d.hold, d.rel, d.continuity, d.diode, Math.round(d.bar * 60), blink]);
     if (!force && key === this.lastLcdKey) return;
     this.lastLcdKey = key;
     const { ctx, canvas, tex } = this.lcd;
@@ -246,6 +276,7 @@ export class Dmm3D {
     ann("HOLD", 230, d.hold);
     ann("Δ", 330, d.rel, 30);
     ann("·)))", 380, d.continuity);
+    diodeSymbol(ctx, 474, 26, 24, d.diode ? on : off);
     // signo
     let txt = d.text;
     const neg = txt.startsWith("-");

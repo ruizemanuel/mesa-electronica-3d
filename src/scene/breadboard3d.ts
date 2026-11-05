@@ -1,6 +1,8 @@
 import * as THREE from "three";
-import { BB_COLS, BOTTOM_ROWS, RAILS, TOP_ROWS, railHasCol, type CircuitDef, type JumperDef, type ResistorDef } from "../sim/circuits";
+import { BB_COLS, BOTTOM_ROWS, RAILS, TOP_ROWS, railHasCol, type CircuitDef, type DiodeDef, type JumperDef, type ResistorDef } from "../sim/circuits";
+import type { DiodePart } from "../sim/diode";
 import { colorBands, techOf, type ResistorPart, type ResistorSpec } from "../sim/resistor";
+import { buildLed, diodeBodyTexture, glowOf, type Led3D } from "./diode3d";
 import { MM, canvasTexture, roundedPath, shadows, std, tag, text } from "./util";
 
 const P = 2.54; // mm
@@ -74,7 +76,7 @@ export const BAND_LAYOUT = {
 export function resistorBodyGeometry(rMM: number, lenMM: number): THREE.LatheGeometry {
   const r = rMM;
   const L = lenMM;
-  const pts = [
+  return latheAlongAxis(L, [
     [0, 0],
     [r * 0.55, 0],
     [r * 0.95, 0.06 * L],
@@ -85,7 +87,27 @@ export function resistorBodyGeometry(rMM: number, lenMM: number): THREE.LatheGeo
     [r * 0.95, 0.94 * L],
     [r * 0.55, L],
     [0, L],
-  ];
+  ]);
+}
+
+/** Cuerpo cilíndrico de bordes redondeados del DO-41 (1N4007). */
+export function diodeBodyGeometry(rMM: number, lenMM: number): THREE.LatheGeometry {
+  const r = rMM;
+  const L = lenMM;
+  return latheAlongAxis(L, [
+    [0, 0],
+    [r * 0.62, 0],
+    [r * 0.9, 0.025 * L],
+    [r, 0.08 * L],
+    [r, 0.92 * L],
+    [r * 0.9, 0.975 * L],
+    [r * 0.62, L],
+    [0, L],
+  ]);
+}
+
+/** Torno alrededor del eje Y centrado en el origen, con UV.y proporcional al largo real (0 a 1). */
+function latheAlongAxis(L: number, pts: number[][]): THREE.LatheGeometry {
   const prof = pts.map(([x, y]) => new THREE.Vector2(x * MM, (y - L / 2) * MM));
   const geo = new THREE.LatheGeometry(prof, 32);
   const pos = geo.getAttribute("position");
@@ -127,6 +149,13 @@ export class Breadboard3D {
   readonly board: THREE.Mesh;
   private readonly parts = new THREE.Group();
   private readonly resistorObjs = new Map<string, { group: THREE.Group; key: string; def: ResistorDef }>();
+  private readonly diodeObjs = new Map<string, { group: THREE.Group; key: string; def: DiodeDef; holes: [string, string]; led: Led3D | null }>();
+  /**
+   * Luz de los LED: siempre en la escena (agregarla o sacarla obligaría a recompilar todos los shaders).
+   * three.js satura la caída 1/d² por debajo de 10 cm, así que a esta escala el alcance lo da la
+   * distancia de corte: ~3 cm alrededor del LED.
+   */
+  readonly ledLight = new THREE.PointLight("#ff3020", 0, 0.035, 2);
   readonly jumperObjs = new Map<string, { wire: THREE.Group; ghost: THREE.Mesh; hit: THREE.Mesh; def: JumperDef }>();
   readonly marker: THREE.Mesh;
   private smoke: THREE.Points;
@@ -168,6 +197,7 @@ export class Breadboard3D {
     );
     this.smoke.frustumCulled = false;
     this.group.add(this.smoke);
+    this.group.add(this.ledLight);
   }
 
   private makeTopTexture(): THREE.CanvasTexture {
@@ -253,12 +283,15 @@ export class Breadboard3D {
     this.marker.position.copy(this.holeLocal(hole)).add(new THREE.Vector3(0, 0.05 * MM, 0));
   }
 
-  build(circuit: CircuitDef, parts: Map<string, ResistorPart>): void {
+  build(circuit: CircuitDef, parts: Map<string, ResistorPart>, diodes: Map<string, DiodePart> = new Map()): void {
     this.parts.clear();
     this.resistorObjs.clear();
+    this.diodeObjs.clear();
     this.jumperObjs.clear();
     for (const r of circuit.resistors) this.addResistor(r, parts.get(r.id)!);
+    for (const d of circuit.diodes ?? []) this.addDiode(d, diodes.get(d.id)!);
     for (const j of circuit.jumpers) this.addJumper(j);
+    this.ledLight.intensity = 0;
   }
 
   private addResistor(def: ResistorDef, part: ResistorPart): void {
@@ -274,20 +307,31 @@ export class Breadboard3D {
   }
 
   private makeResistorMeshes(group: THREE.Group, def: ResistorDef, spec: ResistorSpec, burned: boolean): void {
-    const a = this.holeLocal(def.a, 0);
-    const b = this.holeLocal(def.b, 0);
     const dims = bodyDims(spec);
+    this.makeAxial(group, def.a, def.b, dims, resistorBodyGeometry, () => new THREE.MeshStandardMaterial({ map: bandTexture(spec, burned), roughness: 0.55 }));
+  }
+
+  /**
+   * Componente axial: cuerpo horizontal a un poco más de su radio sobre la placa y patas dobladas
+   * hacia los agujeros. La fracción axial 0 del cuerpo queda del lado del agujero `holeA`.
+   */
+  private makeAxial(
+    group: THREE.Group,
+    holeA: string,
+    holeB: string,
+    dims: { len: number; dia: number; lead: number },
+    geometry: (r: number, len: number) => THREE.BufferGeometry,
+    material: (len: number) => THREE.Material,
+  ): void {
+    const a = this.holeLocal(holeA, 0);
+    const b = this.holeLocal(holeB, 0);
     const span = a.distanceTo(b) / MM;
     const r = dims.dia / 2;
     const h = (BB_H + r + 0.8) * MM; // altura del eje (la placa mide BB_H)
     const dir = b.clone().sub(a).normalize();
     const mid = a.clone().add(b).multiplyScalar(0.5);
-    const bodyLen = Math.min(dims.len, span - 2.4);
-
-    const L = bodyLen;
-    const bodyGeo = resistorBodyGeometry(r, L);
-    const mat = new THREE.MeshStandardMaterial({ map: bandTexture(spec, burned), roughness: 0.55 });
-    const body = new THREE.Mesh(bodyGeo, mat);
+    const L = Math.min(dims.len, span - 2.4);
+    const body = new THREE.Mesh(geometry(r, L), material(L));
     body.position.copy(mid).setY(h);
     body.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
     group.add(body);
@@ -310,6 +354,74 @@ export class Breadboard3D {
     const hit = new THREE.Mesh(new THREE.TubeGeometry(hitPath, 24, (r + 1.2) * MM, 8), new THREE.MeshBasicMaterial({ visible: false }));
     group.add(hit);
     shadows(group, true, false);
+  }
+
+  private addDiode(def: DiodeDef, part: DiodePart): void {
+    const group = new THREE.Group();
+    const o = { group, key: "", def, holes: [def.a, def.k] as [string, string], led: null as Led3D | null };
+    this.diodeObjs.set(def.id, o);
+    this.makeDiodeMeshes(o, part);
+    this.parts.add(group);
+  }
+
+  private diodeKey(part: DiodePart): string {
+    return `${part.type}|${part.reversed}|${part.state === "quemado"}`;
+  }
+
+  private makeDiodeMeshes(o: { group: THREE.Group; key: string; def: DiodeDef; holes: [string, string]; led: Led3D | null }, part: DiodePart): void {
+    o.group.clear();
+    const burned = part.state === "quemado";
+    const [ha, hk] = part.reversed ? [o.def.k, o.def.a] : [o.def.a, o.def.k];
+    o.holes = [ha, hk];
+    if (part.model.led) {
+      o.led = buildLed(part.model, this.holeLocal(ha), this.holeLocal(hk), burned);
+      o.group.add(o.led.group);
+    } else {
+      o.led = null;
+      // DO-41: cuerpo de 5,2 × 2,7 mm, patas de 0,8 mm; la banda queda del lado del cátodo
+      const dims = { len: 5.2, dia: 2.7, lead: 0.8 };
+      this.makeAxial(o.group, ha, hk, dims, diodeBodyGeometry, (len) => new THREE.MeshStandardMaterial({ map: diodeBodyTexture(burned, len, dims.dia / 2), roughness: 0.5 }));
+    }
+    shadows(o.group, true, false);
+    o.group.traverse((m) => {
+      if ((m as THREE.Sprite).isSprite) m.castShadow = false;
+    });
+    tag(o.group, `diode:${part.id}`);
+    o.key = this.diodeKey(part);
+  }
+
+  /** Reconstruye un diodo si cambió de tipo, de orientación o se quemó. */
+  syncDiode(part: DiodePart): void {
+    const o = this.diodeObjs.get(part.id);
+    if (o && o.key !== this.diodeKey(part)) this.makeDiodeMeshes(o, part);
+  }
+
+  /** Brillo de los LED y la luz que proyectan sobre la placa (la del más brillante). */
+  updateLeds(diodes: Map<string, DiodePart>): void {
+    let best: { glow: number; led: Led3D } | null = null;
+    for (const [id, o] of this.diodeObjs) {
+      if (!o.led) continue;
+      const glow = glowOf(diodes.get(id)?.brightness ?? 0);
+      o.led.setGlow(glow);
+      if (glow > 0 && (!best || glow > best.glow)) best = { glow, led: o.led };
+    }
+    if (best) {
+      this.ledLight.color.copy(best.led.light);
+      this.ledLight.position.copy(best.led.glowPoint);
+      this.ledLight.intensity = 0.022 * best.glow;
+    } else this.ledLight.intensity = 0;
+  }
+
+  diodeCenterWorld(id: string): THREE.Vector3 | null {
+    const o = this.diodeObjs.get(id);
+    if (!o) return null;
+    const a = this.holeLocal(o.def.a);
+    const b = this.holeLocal(o.def.k);
+    return this.group.localToWorld(a.add(b).multiplyScalar(0.5).setY((BB_H + (o.led ? 9 : 2.5)) * MM));
+  }
+  /** Agujeros [ánodo, cátodo] según la orientación actual. */
+  diodeHoles(id: string): [string, string] | null {
+    return this.diodeObjs.get(id)?.holes ?? null;
   }
 
   /** Reconstruye un resistor si cambió su valor, potencia o estado. */

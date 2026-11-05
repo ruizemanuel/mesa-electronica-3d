@@ -282,7 +282,8 @@ await hold(0.2);
 await click(0.3);
 await caption("Llave en mA y punta roja a la borna mA", "El shunt interno (1,8 Ω) y el fusible de 440 mA están modelados");
 await camTo(SHOT.dmm, 1.1, { mouseTo: "dial+" });
-for (let i = 0; i < 4; i++) await clickOn("dial+", i === 0 ? 0.2 : 0.08, 0.18);
+// V⎓ → mV⎓ → Ω (con ▶| y ·))) en la misma posición) → mA
+for (let i = 0; i < 3; i++) await clickOn("dial+", i === 0 ? 0.2 : 0.08, 0.18);
 await clickOn("dmm:jack:mA", 0.45, 0.4);
 await camTo(lcd, 1.0);
 await hold(1.5);
