@@ -13,6 +13,7 @@
     "assets:convert": "node tools/py.mjs tools/usd_to_glb.py",
     "record": "node tools/record-showcase.mjs",
     "record:preview": "node tools/record-showcase.mjs --preview",
+    "record:led": "node tools/record-showcase.mjs --guion led",
     "assets:optimize": "node tools/optimize_models.mjs"
   },
   "dependencies": {

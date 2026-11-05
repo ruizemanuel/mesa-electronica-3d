@@ -46,6 +46,7 @@ Medido en un Moto G32 (Adreno 610): de 13 FPS a unos 30–35 en la vista general
 pnpm dev                     # en otra terminal
 pnpm record                  # -> media/showcase.mp4
 pnpm record:preview          # cuadros sueltos en media/preview/ para revisar encuadres
+pnpm record:led              # -> media/led.mp4: clip de 11 s del LED que se quema sin resistencia
 node tools/record-showcase.mjs --url tu-dominio.app   # texto de la placa final
 ```
 

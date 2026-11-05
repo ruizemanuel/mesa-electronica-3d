@@ -3,6 +3,7 @@
  *
  *   pnpm dev                                  # en otra terminal
  *   node tools/record-showcase.mjs            # -> media/showcase.mp4 (1920x1080, H.264)
+ *   node tools/record-showcase.mjs --guion led   # -> media/led.mp4: clip corto del LED que se quema
  *   node tools/record-showcase.mjs --preview  # cuadros sueltos en media/preview/ para revisar encuadres
  *   node tools/record-showcase.mjs --url github.com/usuario/repo   # texto de la placa final
  *
@@ -24,7 +25,8 @@ const opt = (n, d) => {
 const PREVIEW = flag("preview");
 const URL = opt("app", "http://localhost:5173/?capture");
 const LINK = opt("url", "");
-const OUT = opt("out", "media/showcase.mp4");
+const GUION = opt("guion", "showcase");
+const OUT = opt("out", `media/${GUION}.mp4`);
 const FPS = Number(opt("fps", 60));
 const CHROME = opt(
   "chrome",
@@ -211,108 +213,164 @@ const SHOT = {
   mid: { pos: [0.13, 0.9, 0.44], target: [0.12, 0.705, 0.075] },
   end: { pos: [-0.35, 1.2, 1.05], target: [0.0, 0.71, 0.0] },
 };
-const lcd = await ev(() => window.__capture.facing("dmm:lcd", 0.17, 0.005, 0.0));
-
-// estado inicial + calentamiento (compila shaders, no se graba)
-await cam(SHOT.open.pos, SHOT.open.target);
-await page.mouse.move(mouse[0], mouse[1]);
-for (let i = 0; i < 20; i++) {
-  await page.clock.runFor(16);
-  await ev(() => window.__capture.frame(1 / 60));
+/** Estado inicial + calentamiento (compila shaders y asienta la simulación; no se graba). */
+async function warmup(shot) {
+  await cam(shot.pos, shot.target);
+  await page.mouse.move(mouse[0], mouse[1]);
+  for (let i = 0; i < 20; i++) {
+    await page.clock.runFor(16);
+    await ev(() => window.__capture.frame(1 / 60));
+  }
 }
 
-// ================================================================== GUION
-mark("título");
-await card("Mesa de electrónica 3D", "Mediciones reales de tensión, corriente y potencia<br>con assets <b>OpenUSD</b> de <b>NVIDIA SimReady</b>", "three.js · física real");
-await hold(0.35);
-await camTo(SHOT.wide, 3.3, { curve: easeOut });
-await card(null);
-await hold(0.5);
+/** Elige un circuito desde el panel, como lo haría alguien (reconstruye también el protoboard 3D). */
+const loadCircuit = (id) =>
+  ev((c) => {
+    const sel = document.querySelector("#circuit");
+    sel.value = c;
+    sel.dispatchEvent(new Event("change"));
+  }, id);
 
-mark("entorno SimReady");
-await caption("Entorno 100 % SimReady", "Mesa, lámpara, herramientas y taza: OpenUSD de NVIDIA → glTF");
-await camTo(SHOT.envL, 1.6);
-await camTo(SHOT.envR, 3.0, { curve: (t) => t });
-await caption(null);
+// ================================================================== GUIONES
+/** Video principal (~1 min): entorno SimReady, instrumentos, mediciones y sobrecarga. */
+async function guionShowcase() {
+  const lcd = await ev(() => window.__capture.facing("dmm:lcd", 0.17, 0.005, 0.0));
+  await warmup(SHOT.open);
 
-mark("protoboard");
-await camTo(SHOT.bb, 1.5, { mouseTo: "resistor:R1" });
-await caption("Protoboard de 400 puntos, a escala real", "Cada resistor tiene su valor REAL dentro de la tolerancia (±5 %)");
-await moveTo("resistor:R1", 0.4);
-await hold(2.2);
+  mark("título");
+  await card("Mesa de electrónica 3D", "Mediciones reales de tensión, corriente y potencia<br>con assets <b>OpenUSD</b> de <b>NVIDIA SimReady</b>", "three.js · física real");
+  await hold(0.35);
+  await camTo(SHOT.wide, 3.3, { curve: easeOut });
+  await card(null);
+  await hold(0.5);
 
-mark("fuente");
-await caption("Fuente de laboratorio 0–30 V / 0–3 A", "Regulación CV/CC con límite de corriente");
-await camTo(SHOT.psu, 1.3, { mouseTo: "psu:output" });
-await clickOn("psu:output", 0.3, 1.0);
+  mark("entorno SimReady");
+  await caption("Entorno 100 % SimReady", "Mesa, lámpara, herramientas y taza: OpenUSD de NVIDIA → glTF");
+  await camTo(SHOT.envL, 1.6);
+  await camTo(SHOT.envR, 3.0, { curve: (t) => t });
+  await caption(null);
 
-mark("multímetro");
-await caption("Multímetro de 6000 cuentas", "Autorango, 10 MΩ de entrada y fusibles que se queman");
-await camTo(SHOT.dmm, 1.3, { mouseTo: "dial+" });
-await clickOn("dial+", 0.25, 0.35);
-await clickOn("dial+", 0.1, 0.6);
+  mark("protoboard");
+  await camTo(SHOT.bb, 1.5, { mouseTo: "resistor:R1" });
+  await caption("Protoboard de 400 puntos, a escala real", "Cada resistor tiene su valor REAL dentro de la tolerancia (±5 %)");
+  await moveTo("resistor:R1", 0.4);
+  await hold(2.2);
 
-mark("tensión");
-await caption("Medir tensión: en paralelo", "Punta roja en 14b, negra en 14i");
-await camTo(SHOT.bb, 1.3);
-await key("r", 0.1);
-await moveTo("hole:14b", 0.7);
-await hold(0.25);
-await click(0.3);
-await key("n", 0.1);
-await moveTo("hole:14i", 0.6);
-await hold(0.25);
-await click(0.4);
-await camTo(lcd, 1.3);
-await hold(1.6);
-await key(" ", 0.2); // anotar lectura
+  mark("fuente");
+  await caption("Fuente de laboratorio 0–30 V / 0–3 A", "Regulación CV/CC con límite de corriente");
+  await camTo(SHOT.psu, 1.3, { mouseTo: "psu:output" });
+  await clickOn("psu:output", 0.3, 1.0);
 
-mark("corriente");
-await caption("Medir corriente: en serie", "Se quita el puente J1 y el multímetro cierra el circuito");
-await camTo(SHOT.bb, 1.2, { mouseTo: "jumper:J1" });
-await moveTo("jumper:J1", 0.15);
-await click(0.45);
-await key("r", 0.1);
-await moveTo("hole:RT+:14", 0.5);
-await hold(0.2);
-await click(0.3);
-await key("n", 0.1);
-await moveTo("hole:14a", 0.5);
-await hold(0.2);
-await click(0.3);
-await caption("Llave en mA y punta roja a la borna mA", "El shunt interno (1,8 Ω) y el fusible de 440 mA están modelados");
-await camTo(SHOT.dmm, 1.1, { mouseTo: "dial+" });
-// V⎓ → mV⎓ → Ω (con ▶| y ·))) en la misma posición) → mA
-for (let i = 0; i < 3; i++) await clickOn("dial+", i === 0 ? 0.2 : 0.08, 0.18);
-await clickOn("dmm:jack:mA", 0.45, 0.4);
-await camTo(lcd, 1.0);
-await hold(1.5);
-await key(" ", 0.2);
+  mark("multímetro");
+  await caption("Multímetro de 6000 cuentas", "Autorango, 10 MΩ de entrada y fusibles que se queman");
+  await camTo(SHOT.dmm, 1.3, { mouseTo: "dial+" });
+  await clickOn("dial+", 0.25, 0.35);
+  await clickOn("dial+", 0.1, 0.6);
 
-mark("potencia");
-await caption("Potencia: P = V · I", "El cuaderno la calcula con la incertidumbre de los instrumentos");
-await camTo(SHOT.mid, 1.4, { mouseTo: [VIEW.width - 230, 300] });
-await panelScrollTo("#note", 1.0);
-await moveTo("#calcP", 0.6);
-await hold(2.2);
+  mark("tensión");
+  await caption("Medir tensión: en paralelo", "Punta roja en 14b, negra en 14i");
+  await camTo(SHOT.bb, 1.3);
+  await key("r", 0.1);
+  await moveTo("hole:14b", 0.7);
+  await hold(0.25);
+  await click(0.3);
+  await key("n", 0.1);
+  await moveTo("hole:14i", 0.6);
+  await hold(0.25);
+  await click(0.4);
+  await camTo(lcd, 1.3);
+  await hold(1.6);
+  await key(" ", 0.2); // anotar lectura
 
-mark("sobrecarga");
-await caption("¿Y si te pasás de potencia?", "12 V sobre 47 Ω de ¼ W: el modelo térmico lo hace humear… y quemarse");
-await panelScrollTo("#resistors", 0.8);
-await camTo(SHOT.psu, 1.2, { mouseTo: "psu:knob:V" });
-await wheel("psu:knob:V", 7, { shift: true, every: 5 });
-await wheel("psu:knob:A", 9, { shift: true, every: 4 });
-await hold(0.3);
-await camTo(SHOT.bbLow, 1.3, { mouseTo: '.resistor[data-id="R1"] select[data-k="nominal"]' });
-await selectIn('.resistor[data-id="R1"] select[data-k="nominal"]', 47, 0.2);
-await moveTo([VIEW.width * 0.06, VIEW.height * 0.07], 0.6); // esquina libre: sin tooltips
-await hold(3.6);
+  mark("corriente");
+  await caption("Medir corriente: en serie", "Se quita el puente J1 y el multímetro cierra el circuito");
+  await camTo(SHOT.bb, 1.2, { mouseTo: "jumper:J1" });
+  await moveTo("jumper:J1", 0.15);
+  await click(0.45);
+  await key("r", 0.1);
+  await moveTo("hole:RT+:14", 0.5);
+  await hold(0.2);
+  await click(0.3);
+  await key("n", 0.1);
+  await moveTo("hole:14a", 0.5);
+  await hold(0.2);
+  await click(0.3);
+  await caption("Llave en mA y punta roja a la borna mA", "El shunt interno (1,8 Ω) y el fusible de 440 mA están modelados");
+  await camTo(SHOT.dmm, 1.1, { mouseTo: "dial+" });
+  // V⎓ → mV⎓ → Ω (con ▶| y ·))) en la misma posición) → mA
+  for (let i = 0; i < 3; i++) await clickOn("dial+", i === 0 ? 0.2 : 0.08, 0.18);
+  await clickOn("dmm:jack:mA", 0.45, 0.4);
+  await camTo(lcd, 1.0);
+  await hold(1.5);
+  await key(" ", 0.2);
 
-mark("final");
-await caption(null);
-await card("Mesa de electrónica 3D", `Física con análisis nodal · three.js · OpenUSD → glTF<br>${LINK ? `<code>${LINK}</code>` : "Código abierto"}`, "Assets: NVIDIA SimReady · CC-BY-4.0");
-await camTo(SHOT.end, 4.2, { curve: (t) => t });
-await hold(0.6);
+  mark("potencia");
+  await caption("Potencia: P = V · I", "El cuaderno la calcula con la incertidumbre de los instrumentos");
+  await camTo(SHOT.mid, 1.4, { mouseTo: [VIEW.width - 230, 300] });
+  await panelScrollTo("#note", 1.0);
+  await moveTo("#calcP", 0.6);
+  await hold(2.2);
+
+  mark("sobrecarga");
+  await caption("¿Y si te pasás de potencia?", "12 V sobre 47 Ω de ¼ W: el modelo térmico lo hace humear… y quemarse");
+  await panelScrollTo("#resistors", 0.8);
+  await camTo(SHOT.psu, 1.2, { mouseTo: "psu:knob:V" });
+  await wheel("psu:knob:V", 7, { shift: true, every: 5 });
+  await wheel("psu:knob:A", 9, { shift: true, every: 4 });
+  await hold(0.3);
+  await camTo(SHOT.bbLow, 1.3, { mouseTo: '.resistor[data-id="R1"] select[data-k="nominal"]' });
+  await selectIn('.resistor[data-id="R1"] select[data-k="nominal"]', 47, 0.2);
+  await moveTo([VIEW.width * 0.06, VIEW.height * 0.07], 0.6); // esquina libre: sin tooltips
+  await hold(3.6);
+
+  mark("final");
+  await caption(null);
+  await card("Mesa de electrónica 3D", `Física con análisis nodal · three.js · OpenUSD → glTF<br>${LINK ? `<code>${LINK}</code>` : "Código abierto"}`, "Assets: NVIDIA SimReady · CC-BY-4.0");
+  await camTo(SHOT.end, 4.2, { curve: (t) => t });
+  await hold(0.6);
+}
+
+/** Clip corto para X (~11 s): un LED rojo con su resistencia; se la puentea y se quema. */
+async function guionLed() {
+  // LED1 entre 12h y 11h, R1 en la fila c y el puente J3 (quitado) en la fila b, columnas 8–12.
+  // La cámara va alta (~50°) y desde la izquierda: si no, el LED queda delante de J3 y el clic le cae al LED.
+  const ledFar = { pos: [-0.075, 0.772, 0.168], target: [-0.032, 0.6835, 0.099] };
+  const ledNear = { pos: [-0.06, 0.74, 0.142], target: [-0.032, 0.6835, 0.1] };
+  const ledBurn = { pos: [-0.053, 0.729, 0.134], target: [-0.031, 0.6845, 0.104] };
+  const ledEnd = { pos: [-0.075, 0.79, 0.27], target: [-0.03, 0.684, 0.1] };
+  await loadCircuit("led");
+  await ev(() => (window.__capture.bench.psu.output = true));
+  mouse = [VIEW.width * 0.3, VIEW.height * 0.82];
+  await warmup(ledFar);
+
+  mark("led encendido");
+  await caption("Nuevo: LEDs y diodos", "LED rojo con 330 Ω a 5 V → 9 mA (su máximo es 30 mA)");
+  await camTo(ledNear, 2.8, { curve: easeOut });
+  await hold(0.3);
+
+  mark("sin resistencia");
+  await caption("¿Y si le sacás la resistencia?", "El puente J3 la cortocircuita · la fuente limita a 0,5 A");
+  await moveTo("jumper:J3", 0.9);
+  await hold(0.45);
+  await click(0.05);
+  if (!(await ev(() => window.__capture.bench.jumperPresent.get("J3")))) throw new Error("El clic no puso el puente J3 (¿lo tapa el LED desde este ángulo?)");
+
+  mark("se quema");
+  await caption("500 mA en un LED de 30 mA", "La juntura pasa los 170 °C en medio segundo y se abre");
+  // sin el cartel del mouse encima del LED justo en el fogonazo; el mouse se va a una esquina vacía
+  await ev(() => document.querySelector(".tooltip")?.style.setProperty("visibility", "hidden"));
+  await camTo(ledBurn, 3.6, { mouseTo: [VIEW.width * 0.05, VIEW.height * 0.06], curve: (t) => t });
+
+  mark("final");
+  await caption(null);
+  await card("Mesa de electrónica 3D", `LEDs, diodos, prueba de diodos y curva I-V<br><code>${LINK || "mesa-electronica-3d.vercel.app"}</code>`, "Nuevo");
+  await camTo(ledEnd, 2.4, { curve: (t) => t });
+  await hold(0.5);
+}
+
+const GUIONES = { showcase: guionShowcase, led: guionLed };
+if (!GUIONES[GUION]) throw new Error(`Guion desconocido: ${GUION} (hay: ${Object.keys(GUIONES).join(", ")})`);
+await GUIONES[GUION]();
 
 // ------------------------------------------------------------------ fin
 console.log(`Total: ${(frame / FPS).toFixed(1)} s (${frame} cuadros) en ${((Date.now() - t0) / 1000).toFixed(0)} s`);
