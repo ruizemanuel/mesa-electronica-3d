@@ -146,8 +146,9 @@ function probePose(c: ProbeId, t: ProbeTarget, hover = false): { tip: THREE.Vect
   if (t.kind === "hole") {
     const tip = bb.holeWorld(t.hole, hover ? -3 : c === "sgnd" ? 0.5 : 1.5);
     // mangos inclinados hacia atrás y hacia afuera para no tapar el protoboard; los del osciloscopio, hacia él
-    // las del osciloscopio, acostadas hacia los costados (paradas taparían la pantalla)
-    if (c === "ch1" || c === "ch2") return { tip, dir: new V3(0.55 * side, 0.62, -0.58).normalize() };
+    // las del osciloscopio, inclinadas hacia atrás y a la derecha, del lado de los BNC (paradas, o hacia
+    // la izquierda, taparían la pantalla)
+    if (c === "ch1" || c === "ch2") return { tip, dir: (c === "ch1" ? new V3(0.42, 0.62, -0.66) : new V3(0.62, 0.6, -0.5)).normalize() };
     if (c === "sgnd") return { tip, dir: new V3(0, 1, -0.25).normalize() };
     return { tip, dir: new V3(0.5 * side, 1, -0.6).normalize() };
   }

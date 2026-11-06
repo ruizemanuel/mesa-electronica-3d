@@ -1,6 +1,7 @@
 /**
  * Genera public/og.jpg (1200×630), la imagen de vista previa del link en X y otras redes.
  * Se renderiza desde la escena real en modo ?capture, con una medición en curso.
+ * La cámara se puede probar sin tocar el código: OG_CAM='[[x,y,z],[tx,ty,tz]]' node tools/og-image.mjs
  *
  *   pnpm dev                       # en otra terminal
  *   node tools/og-image.mjs        # -> public/og.jpg
@@ -23,20 +24,25 @@ await page.goto(APP, { waitUntil: "load" });
 await page.waitForFunction(() => window.__capture?.loaded, null, { timeout: 120000 });
 await page.evaluate(() => document.fonts.ready);
 
-// escena: medición de tensión sobre R1, panel lateral oculto
-await page.evaluate(() => {
+// escena: circuito RC con el generador encendido (cuadrada en CH1, carga del capacitor en CH2) y el
+// multímetro midiendo el promedio sobre el capacitor; panel lateral oculto
+const CAM = JSON.parse(process.env.OG_CAM ?? "null") ?? [[0.03, 0.93, 0.6], [0.03, 0.735, -0.07]];
+await page.evaluate((cam) => {
   const s = document.createElement("style");
   s.textContent = `#panel{display:none!important} .cap-cursor{display:none!important}`;
   document.head.appendChild(s);
   window.dispatchEvent(new Event("resize"));
+  const sel = document.querySelector("#circuit");
+  sel.value = "rc";
+  sel.dispatchEvent(new Event("change"));
   const b = window.__capture.bench;
-  b.psu.output = true;
+  b.gen.setOutput(true);
   b.dmm.setDial("VDC");
-  b.probes.red = { kind: "hole", hole: "14b" };
-  b.probes.black = { kind: "hole", hole: "14i" };
-  window.__capture.cam([-0.05, 0.9, 0.64], [-0.05, 0.738, -0.01]);
-});
-for (let i = 0; i < 90; i++) {
+  b.probes.red = { kind: "hole", hole: "14c" };
+  b.probes.black = { kind: "hole", hole: "RB-:29" }; // en la punta derecha del riel −: así no tapa la pantalla
+  window.__capture.cam(cam[0], cam[1]);
+}, CAM);
+for (let i = 0; i < 120; i++) {
   await page.clock.runFor(17);
   await page.evaluate(() => window.__capture.frame(1 / 60));
 }
@@ -50,7 +56,7 @@ await page.evaluate(() => {
     <div style="position:fixed;left:48px;top:34px;z-index:81;font-family:Inter,'Segoe UI',sans-serif;color:#fff">
       <div style="font-size:17px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#f0b429">three.js · OpenUSD · NVIDIA SimReady</div>
       <div style="font-size:58px;font-weight:800;letter-spacing:-.025em;line-height:1.05;margin-top:8px">Mesa de electrónica 3D</div>
-      <div style="font-size:24px;color:#d5d9df;margin-top:10px">Multímetro, fuente y protoboard con física real · gratis en el navegador</div>
+      <div style="font-size:24px;color:#d5d9df;margin-top:10px">Osciloscopio, generador, multímetro y fuente con física real · gratis en el navegador</div>
     </div>`;
   document.body.appendChild(o);
 });
