@@ -16,6 +16,8 @@
  *   resuelve con Newton-Raphson: en cada iteración el diodo se reemplaza por su modelo
  *   linealizado (conductancia + fuente de corriente) y el salto de tensión de la juntura se
  *   limita como en SPICE (pnjlim), porque con la exponencial Newton puro diverge.
+ * - Capacitor C(a, b): en continua es un circuito abierto. El análisis transitorio (transient.ts)
+ *   lo reemplaza por su modelo de compañía.
  */
 export type NodeId = string;
 
@@ -58,7 +60,14 @@ export interface DiodeEl extends DiodeParams {
   /** Cátodo. */
   k: NodeId;
 }
-export type Element = ResistorEl | VSourceEl | ISourceEl | DiodeEl;
+export interface CapacitorEl {
+  kind: "C";
+  id: string;
+  a: NodeId;
+  b: NodeId;
+  farads: number;
+}
+export type Element = ResistorEl | VSourceEl | ISourceEl | DiodeEl | CapacitorEl;
 
 /** kT/q a 25 °C. */
 export const VT_25 = (1.380649e-23 * 298.15) / 1.602176634e-19;
@@ -83,6 +92,12 @@ export class Netlist {
   d(id: string, a: NodeId, k: NodeId, p: DiodeParams): this {
     if (!(p.is > 0) || !(p.n > 0) || !(p.rs >= 0)) throw new Error(`Diodo ${id} inválido`);
     this.elements.push({ kind: "D", id, a, k, is: p.is, n: p.n, rs: p.rs, vt: p.vt });
+    return this;
+  }
+  /** Capacitor de `farads` entre `a` y `b` (abierto en continua). */
+  c(id: string, a: NodeId, b: NodeId, farads: number): this {
+    if (!(farads > 0)) throw new Error(`Capacitor ${id} inválido: ${farads}`);
+    this.elements.push({ kind: "C", id, a, b, farads });
     return this;
   }
 }
@@ -171,7 +186,7 @@ export interface SolveOptions {
 }
 
 /** Corriente y conductancia de la juntura; más allá de 80·nVt la exponencial sigue como su recta tangente. */
-function junction(v: number, is: number, nvt: number): { i: number; g: number } {
+export function junction(v: number, is: number, nvt: number): { i: number; g: number } {
   const u = v / nvt;
   if (u > 80) {
     const e = Math.exp(80);
@@ -223,6 +238,9 @@ export function solve(net: Netlist, ground: NodeId, gmin = GMIN, opts: SolveOpti
       idx(el.k);
       idx(jNode(el));
       diodes.push(el);
+    } else if (el.kind === "C") {
+      idx(el.a); // abierto en continua: solo cuenta como nodo
+      idx(el.b);
     } else {
       idx(el.from);
       idx(el.to);

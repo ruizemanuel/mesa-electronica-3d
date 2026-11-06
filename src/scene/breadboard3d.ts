@@ -1,6 +1,8 @@
 import * as THREE from "three";
-import { BB_COLS, BOTTOM_ROWS, RAILS, TOP_ROWS, railHasCol, type CircuitDef, type DiodeDef, type JumperDef, type ResistorDef } from "../sim/circuits";
+import type { CapacitorPart } from "../sim/capacitor";
+import { BB_COLS, BOTTOM_ROWS, RAILS, TOP_ROWS, railHasCol, type CapacitorDef, type CircuitDef, type DiodeDef, type JumperDef, type ResistorDef } from "../sim/circuits";
 import type { DiodePart } from "../sim/diode";
+import { buildCeramic, buildElectrolytic } from "./cap3d";
 import { colorBands, techOf, type ResistorPart, type ResistorSpec } from "../sim/resistor";
 import { buildLed, diodeBodyTexture, glowOf, type Led3D } from "./diode3d";
 import { MM, canvasTexture, roundedPath, shadows, std, tag, text } from "./util";
@@ -150,6 +152,7 @@ export class Breadboard3D {
   private readonly parts = new THREE.Group();
   private readonly resistorObjs = new Map<string, { group: THREE.Group; key: string; def: ResistorDef }>();
   private readonly diodeObjs = new Map<string, { group: THREE.Group; key: string; def: DiodeDef; holes: [string, string]; led: Led3D | null }>();
+  private readonly capObjs = new Map<string, { group: THREE.Group; key: string; def: CapacitorDef; holes: [string, string] }>();
   /**
    * Luz de los LED: siempre en la escena (agregarla o sacarla obligaría a recompilar todos los shaders).
    * three.js satura la caída 1/d² por debajo de 10 cm, así que a esta escala el alcance lo da la
@@ -283,13 +286,15 @@ export class Breadboard3D {
     this.marker.position.copy(this.holeLocal(hole)).add(new THREE.Vector3(0, 0.05 * MM, 0));
   }
 
-  build(circuit: CircuitDef, parts: Map<string, ResistorPart>, diodes: Map<string, DiodePart> = new Map()): void {
+  build(circuit: CircuitDef, parts: Map<string, ResistorPart>, diodes: Map<string, DiodePart> = new Map(), caps: Map<string, CapacitorPart> = new Map()): void {
     this.parts.clear();
     this.resistorObjs.clear();
     this.diodeObjs.clear();
+    this.capObjs.clear();
     this.jumperObjs.clear();
     for (const r of circuit.resistors) this.addResistor(r, parts.get(r.id)!);
     for (const d of circuit.diodes ?? []) this.addDiode(d, diodes.get(d.id)!);
+    for (const c of circuit.capacitors ?? []) this.addCap(c, caps.get(c.id)!);
     for (const j of circuit.jumpers) this.addJumper(j);
     this.ledLight.intensity = 0;
   }
@@ -422,6 +427,47 @@ export class Breadboard3D {
   /** Agujeros [ánodo, cátodo] según la orientación actual. */
   diodeHoles(id: string): [string, string] | null {
     return this.diodeObjs.get(id)?.holes ?? null;
+  }
+
+  private addCap(def: CapacitorDef, part: CapacitorPart): void {
+    const o = { group: new THREE.Group(), key: "", def, holes: [def.a, def.b] as [string, string] };
+    this.capObjs.set(def.id, o);
+    this.makeCapMeshes(o, part);
+    this.parts.add(o.group);
+  }
+
+  private capKey(part: CapacitorPart): string {
+    return `${part.nominal}|${part.reversed}|${part.state}`;
+  }
+
+  private makeCapMeshes(o: { group: THREE.Group; key: string; def: CapacitorDef; holes: [string, string] }, part: CapacitorPart): void {
+    o.group.clear();
+    const [hp, hn] = part.reversed ? [o.def.b, o.def.a] : [o.def.a, o.def.b];
+    o.holes = [hp, hn];
+    const c = part.polarized
+      ? buildElectrolytic(part.model, this.holeLocal(hp), this.holeLocal(hn), part.state === "inflado")
+      : buildCeramic(part.model, this.holeLocal(hp), this.holeLocal(hn));
+    o.group.add(c.group);
+    shadows(o.group, true, false);
+    tag(o.group, `cap:${part.id}`);
+    o.key = this.capKey(part);
+  }
+
+  /** Reconstruye un capacitor si cambió de valor, de orientación o se infló. */
+  syncCap(part: CapacitorPart): void {
+    const o = this.capObjs.get(part.id);
+    if (o && o.key !== this.capKey(part)) this.makeCapMeshes(o, part);
+  }
+  /** Agujeros [pata +, pata −] según la orientación actual. */
+  capHoles(id: string): [string, string] | null {
+    return this.capObjs.get(id)?.holes ?? null;
+  }
+  capCenterWorld(id: string): THREE.Vector3 | null {
+    const o = this.capObjs.get(id);
+    if (!o) return null;
+    const a = this.holeLocal(o.def.a);
+    const b = this.holeLocal(o.def.b);
+    return this.group.localToWorld(a.add(b).multiplyScalar(0.5).setY((BB_H + 8) * MM));
   }
 
   /** Reconstruye un resistor si cambió su valor, potencia o estado. */

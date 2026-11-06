@@ -140,6 +140,18 @@ const EMPTY: DmmDisplay = {
   leadAlert: false,
 };
 
+/** Lo que integró el instrumento durante una ventana de medición (análisis transitorio). */
+export interface DmmWindow {
+  duration: number;
+  /** Promedio de V(VΩ) − V(COM). */
+  vMean: number;
+  /** Valor eficaz de la componente alterna de esa tensión, con el ancho de banda del conversor. */
+  vAcRms: number;
+  /** Corriente media por los shunts de mA y de 10 A. */
+  iMa: number;
+  iA: number;
+}
+
 export const NODE = {
   COM: "dmm:COM",
   VOhm: "dmm:VOhm",
@@ -275,7 +287,7 @@ export class Multimeter {
       case "DIODE":
         return sol.vab(NODE.VOhm, NODE.COM);
       case "VAC":
-        return 0; // señal continua pura: acoplamiento de AC la bloquea
+        return 0; // en continua pura el acoplamiento de alterna bloquea todo
       case "OHM":
       case "CONT": {
         const vx = sol.vab(NODE.VOhm, NODE.COM);
@@ -314,27 +326,8 @@ export class Multimeter {
    * `solveAt(r)` devuelve la solución del circuito con el óhmetro en el rango r (-1 = no óhmetro).
    */
   update(dt: number, solveAt: (ohmRange: number) => Solution, force = false): void {
-    if (this.dial === "OFF") {
-      this.display = { ...EMPTY };
-      return;
-    }
-    this.updateTimer -= dt;
-    if (!force && this.updateTimer > 0) return;
-    this.updateTimer = 0.33;
-
+    if (!this.tick(dt, force)) return;
     const ranges = this.ranges();
-    const acdc = this.dial === "VAC" ? "AC" : this.ohmMode || this.dial === "DIODE" ? "" : "DC";
-    const baseUnit = this.dial === "mA" || this.dial === "A" ? "A" : this.ohmMode ? "Ω" : "V";
-
-    if (this.leadAlert) {
-      this.display = { ...EMPTY, on: true, text: "LEAd", leadAlert: true, beep: true, acdc, baseUnit };
-      return;
-    }
-    if (this.hold) {
-      this.display = { ...this.display, hold: true, beep: false };
-      return;
-    }
-
     let raw: number;
     if (this.ohmMode) {
       if (this.auto && ranges.length > 1) {
@@ -354,19 +347,100 @@ export class Multimeter {
       }
     } else {
       raw = this.rawValue(solveAt(-1), -1);
-      if (this.auto && ranges.length > 1) {
-        let i = this.rangeIdx;
-        // sube mientras desborda; baja con histéresis (cabe en el rango inferior con margen)
-        while (i < ranges.length - 1 && Math.abs(raw) / ranges[i].res > ranges[i].maxCounts) i++;
-        while (i > 0 && Math.abs(raw) / ranges[i - 1].res < 0.9 * ranges[i - 1].maxCounts) i--;
-        this.rangeIdx = i;
-      }
+      this.autorange(raw);
     }
+    this.present(raw);
+  }
+
+  /**
+   * Actualización con señales que varían en el tiempo (análisis transitorio): el instrumento integra
+   * durante la ventana, como el conversor de doble rampa de uno real. V⎓ muestra el promedio y V~ el
+   * valor eficaz verdadero de la componente alterna (TRUE RMS, con ancho de banda de unos kHz).
+   * Devuelve true si tomó la lectura (y la ventana se puede reiniciar).
+   */
+  updateFrom(dt: number, w: DmmWindow | null, force = false): boolean {
+    if (this.dial === "OFF") {
+      this.display = { ...EMPTY };
+      return true;
+    }
+    if (!w || w.duration <= 0) {
+      this.updateTimer -= dt;
+      return false;
+    }
+    if (!this.tick(dt, force)) return false;
+    let raw: number;
+    switch (this.dial) {
+      case "VAC":
+        raw = w.vAcRms;
+        break;
+      case "OHM":
+      case "CONT": {
+        const den = this.ohmVs - w.vMean;
+        raw = den <= 1e-12 ? Infinity : (this.rref(this.rangeIdx) * w.vMean) / den;
+        break;
+      }
+      case "mA":
+        raw = this.fuseMa.blown ? 0 : w.iMa;
+        break;
+      case "A":
+        raw = this.fuseA.blown ? 0 : w.iA;
+        break;
+      default:
+        raw = w.vMean;
+    }
+    // con el óhmetro la lectura es válida en cualquier rango (es ratiométrica): se ajusta para el próximo
+    this.autorange(raw);
+    this.present(raw);
+    return true;
+  }
+
+  /** Avanza el temporizador de lecturas; false si todavía no toca actualizar. */
+  private tick(dt: number, force: boolean): boolean {
+    if (this.dial === "OFF") {
+      this.display = { ...EMPTY };
+      return false;
+    }
+    this.updateTimer -= dt;
+    if (!force && this.updateTimer > 0) return false;
+    this.updateTimer = 0.33;
+    if (this.leadAlert) {
+      this.display = { ...EMPTY, on: true, text: "LEAd", leadAlert: true, beep: true, acdc: this.acdc, baseUnit: this.baseUnit };
+      return false;
+    }
+    if (this.hold) {
+      this.display = { ...this.display, hold: true, beep: false };
+      return false;
+    }
+    return true;
+  }
+
+  private get acdc(): "DC" | "AC" | "" {
+    return this.dial === "VAC" ? "AC" : this.ohmMode || this.dial === "DIODE" ? "" : "DC";
+  }
+  private get baseUnit(): "V" | "A" | "Ω" {
+    return this.dial === "mA" || this.dial === "A" ? "A" : this.ohmMode ? "Ω" : "V";
+  }
+
+  /** Autorango: sube mientras desborda; baja con histéresis (cabe en el rango inferior con margen). */
+  private autorange(raw: number): void {
+    const ranges = this.ranges();
+    if (!this.auto || ranges.length <= 1) return;
+    let i = this.rangeIdx;
+    while (i < ranges.length - 1 && !(Math.abs(raw) / ranges[i].res <= ranges[i].maxCounts)) i++;
+    while (i > 0 && Math.abs(raw) / ranges[i - 1].res < 0.9 * ranges[i - 1].maxCounts) i--;
+    this.rangeIdx = i;
+  }
+
+  /** Calibración, ruido, cuentas y formato del display a partir del valor verdadero. */
+  private present(raw: number): void {
+    const ranges = this.ranges();
     this.lastRaw = raw;
     const r = ranges[this.rangeIdx];
     const c = this.cal(`${this.dial}:${this.rangeIdx}`, r);
     const noise = this.rng.gaussTrunc(0.35, 3);
     let shown = isFinite(raw) ? raw * (1 + c.gain) + (c.off + noise) * r.res : Infinity;
+    // en V~ el convertidor de valor eficaz no baja de cero (y el offset no lo vuelve negativo)
+    if (this.dial === "VAC" && isFinite(shown)) shown = Math.abs(shown);
     if (this.relRef !== null && isFinite(shown)) shown -= this.relRef;
     let counts = isFinite(shown) ? Math.round(shown / r.res) : Infinity;
     if (Object.is(counts, -0)) counts = 0;
@@ -380,7 +454,7 @@ export class Multimeter {
       on: true,
       text,
       unit: r.unit,
-      acdc,
+      acdc: this.acdc,
       auto: this.auto && ranges.length > 1, // con un solo rango (▶|, ·))), mV) no hay autorango
       hold: false,
       rel: this.relRef !== null,
@@ -389,7 +463,7 @@ export class Multimeter {
       diode: this.dial === "DIODE",
       bar: ol ? 1 : Math.min(1, Math.abs(valueShown) / (r.maxCounts * r.res)),
       value: ol ? null : valueShown,
-      baseUnit,
+      baseUnit: this.baseUnit,
       range: r,
       leadAlert: false,
     };

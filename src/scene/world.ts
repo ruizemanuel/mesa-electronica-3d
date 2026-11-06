@@ -18,11 +18,11 @@ export interface Placement {
 /** Assets SimReady y dónde van. La mesa se gira para que su frente (+X en el USD) mire a +Z. */
 export const SIMREADY_LAYOUT: Placement[] = [
   { id: "furniture_workbench_standard_e01", pos: [0, 0, 0], rotY: -Math.PI / 2 },
-  { id: "lamp_table_bedside_a01", pos: [0.6, BENCH_TOP, -0.16], rotY: 0.4 },
+  { id: "lamp_table_bedside_a01", pos: [-0.615, BENCH_TOP, -0.165], rotY: -0.5 },
   { id: "handTool_pliers_long_nose_a01", pos: [-0.6, BENCH_TOP, 0.13], rotY: 1.25 },
   { id: "handTool_pliers_diagonal_cutting_a01", pos: [-0.52, BENCH_TOP, 0.2], rotY: -2.3 },
   { id: "handTool_screwdriver_slotted_4mm_a01", pos: [0.43, BENCH_TOP, 0.215], rotY: 2.7 },
-  { id: "dishware_mug_coffee_a01", pos: [0.5, BENCH_TOP, 0.06], rotY: -0.6 },
+  { id: "dishware_mug_coffee_a01", pos: [0.6, BENCH_TOP, 0.12], rotY: -0.6 },
   { id: "chair_office_amf_black_a01", pos: [0.08, 0, 0.62], rotY: Math.PI + 0.25 },
 ];
 
@@ -30,12 +30,19 @@ export interface CameraView {
   name: string;
   pos: [number, number, number];
   target: [number, number, number];
+  /**
+   * Ancho (m) que tiene que entrar en pantalla. Con este dato, en pantallas angostas la cámara solo se
+   * aleja lo necesario, sin cambiar el ángulo (para mirar de frente la pantalla de un instrumento).
+   */
+  width?: number;
 }
 export const VIEWS: Record<string, CameraView> = {
-  general: { name: "General", pos: [0.0, 1.16, 0.98], target: [-0.03, 0.7, 0.0] },
+  general: { name: "General", pos: [0.07, 1.16, 0.98], target: [0.05, 0.7, 0.0] },
   protoboard: { name: "Protoboard", pos: [-0.02, 0.79, 0.215], target: [-0.02, 0.676, 0.098] },
   multimetro: { name: "Multímetro", pos: [0.37, 0.88, 0.38], target: [0.255, 0.765, 0.04] },
   fuente: { name: "Fuente", pos: [-0.28, 0.84, 0.31], target: [-0.35, 0.74, 0.04] },
+  osciloscopio: { name: "Osciloscopio", pos: [-0.05, 0.855, 0.2], target: [-0.04, 0.752, -0.1], width: 0.34 },
+  generador: { name: "Generador", pos: [0.3, 0.82, 0.215], target: [0.45, 0.712, -0.045], width: 0.23 },
 };
 
 /** Proporción de pantalla con la que se diseñaron las vistas (zona 3D de un monitor 16:9). */
@@ -95,8 +102,14 @@ export function createWorld(container: HTMLElement, quality: Quality, opts: { pr
     const narrow = Math.min(1, (DESIGN_ASPECT / camera.aspect - 1) / 0.85);
     const t0 = new THREE.Vector3(...view.target);
     const s = new THREE.Spherical().setFromVector3(new THREE.Vector3(...view.pos).sub(t0));
+    if (view.width) {
+      const hfov = 2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * camera.aspect);
+      s.radius = Math.max(s.radius, (view.width / 2 / Math.tan(hfov / 2)) * 1.04);
+      const p = new THREE.Vector3().setFromSpherical(s).add(t0);
+      return { ...view, pos: p.toArray() as [number, number, number] };
+    }
     // alejarse lo justo para que entren fuente, protoboard y multímetro (las vistas cercanas, menos)
-    s.radius *= 1 + 0.35 * narrow * Math.min(1, s.radius / 0.6);
+    s.radius *= 1 + 0.42 * narrow * Math.min(1, s.radius / 0.6);
     s.phi *= 1 - 0.4 * narrow; // mirar más desde arriba: usa el alto de la pantalla y saltea la silla
     const t = t0;
     const p = new THREE.Vector3().setFromSpherical(s).add(t);
@@ -126,7 +139,7 @@ export function createWorld(container: HTMLElement, quality: Quality, opts: { pr
   fill.position.set(1.5, 1.4, 2.0);
   scene.add(fill);
   const lampLight = new THREE.PointLight("#ffd9a8", 0.9, 1.6, 2);
-  lampLight.position.set(0.6, BENCH_TOP + 0.28, -0.16);
+  lampLight.position.set(-0.615, BENCH_TOP + 0.28, -0.165);
   scene.add(lampLight);
 
   // piso y paredes

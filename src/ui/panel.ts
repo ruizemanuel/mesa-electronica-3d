@@ -1,8 +1,12 @@
-import type { Bench } from "../sim/bench";
-import { CIRCUITS } from "../sim/circuits";
+import type { Bench, ProbeId } from "../sim/bench";
+import { CAP_VALUES, formatCap, kindOf } from "../sim/capacitor";
+import { CIRCUITS, type CircuitGroup } from "../sim/circuits";
 import { DIODE_TYPES, type DiodeType } from "../sim/diode";
 import { DIAL_FUNCTIONS, DIAL_LABEL, type Dial, type Jack } from "../sim/dmm";
+import { WAVES, WAVE_LABEL, formatFreq, type Wave } from "../sim/fgen";
 import { colorBands, eSeriesValues, formatSI, type PowerRating, type ResistorSpec } from "../sim/resistor";
+import { TDIVS, VDIVS, type Oscilloscope } from "../sim/scope";
+import { graticuleRect } from "./scopescreen";
 import { VIEWS } from "../scene/world";
 import { IS_TOUCH } from "../input";
 import { DIODE_LABEL, IV_MAX_SERIES, ivChartSvg, ivLegend, ivSeries, type IvPoint } from "./ivcurve";
@@ -23,8 +27,16 @@ export interface PanelActions {
   toggleOutput(): void;
   replaceFuse(which: "mA" | "A"): void;
   stowProbes(): void;
-  pickProbe(c: "red" | "black"): void;
+  pickProbe(c: ProbeId): void;
   toggleMute(): boolean;
+  /** Cambios en el generador (forma, frecuencia, amplitud, offset, salida). */
+  setGen(p: { wave?: Wave; freq?: number; vpp?: number; offset?: number; output?: boolean }): void;
+  /** Cualquier ajuste del osciloscopio (con el clic de la perilla o el botón). */
+  scope(fn: (s: Oscilloscope) => void): void;
+  setCap(id: string, nominal: number): void;
+  flipCap(id: string): void;
+  dischargeCap(id: string): void;
+  replaceCap(id: string): void;
 }
 
 interface Note {
@@ -49,6 +61,8 @@ const QTY: Record<Dial, string> = {
   A: "Corriente DC",
 };
 const JACK_LABEL: Record<Jack, string> = { VOhm: "VΩ", mA: "mA", A: "10A" };
+const GROUPS: CircuitGroup[] = ["Resistores", "Diodos y LED", "Capacitores y señales"];
+const fmtDiv = (v: number, unit: string) => formatSI(v, unit, 3).replace(" ", "\u00a0");
 const POWERS: PowerRating[] = [0.25, 0.5, 1, 2];
 const POWER_LABEL: Record<number, string> = { 0.25: "¼ W", 0.5: "½ W", 1: "1 W", 2: "2 W" };
 
@@ -58,14 +72,16 @@ const MOUSE_HELP = `
           <li><b>Perillas de la fuente</b>: rueda o arrastrar (Shift ×10, Alt ×0,1)</li>
           <li><b>Puntas</b>: clic en la punta y luego en un agujero, una pata o un borne. <kbd>Esc</kbd> cancela.</li>
           <li><b>Puentes</b>: clic para quitar/poner</li>
-          <li><b>SELECT</b> (multímetro): en la posición Ω alterna Ω → ▶︎| diodos → ·))) continuidad</li>`;
+          <li><b>SELECT</b> (multímetro): en la posición Ω alterna Ω → ▶︎| diodos → ·))) continuidad</li>
+          <li><b>Osciloscopio y generador</b>: perillas con rueda o arrastrando; los cursores se arrastran sobre la pantalla (también la del panel)</li>`;
 const TOUCH_HELP = `
           <li><b>Rotar</b>: arrastrar con un dedo · <b>Zoom y desplazar</b>: dos dedos</li>
           <li><b>Llave del multímetro</b>: tocá a la izquierda o a la derecha de la llave</li>
           <li><b>Perillas de la fuente</b>: arrastrá hacia arriba o abajo (o escribí el valor en el panel)</li>
           <li><b>Puntas</b>: tomá una punta, apoyá el dedo y arrastrá; la mira va por encima del dedo y la punta se apoya al soltar</li>
           <li><b>Puentes</b>: tocalos para quitarlos o ponerlos</li>
-          <li><b>SELECT</b> (multímetro): en la posición Ω alterna Ω → ▶︎| diodos → ·))) continuidad</li>`;
+          <li><b>SELECT</b> (multímetro): en la posición Ω alterna Ω → ▶︎| diodos → ·))) continuidad</li>
+          <li><b>Osciloscopio</b>: los cursores se arrastran con el dedo sobre la pantalla del panel</li>`;
 
 const h = <K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Record<string, string> = {}, html = ""): HTMLElementTagNameMap[K] => {
   const el = document.createElement(tag);
@@ -87,11 +103,16 @@ export class Panel {
   private ivMsg = "";
   /** Cantidad de anotaciones la última vez que se armaron los selectores de la curva. */
   private ivSeenNotes = 0;
+  /** Canvas de la pantalla del osciloscopio (el mismo que usa el modelo 3D como textura). */
+  scopeCanvas: HTMLCanvasElement | null = null;
+  private dragCursor: 0 | 1 | null = null;
 
   constructor(
     private readonly bench: Bench,
     private readonly act: PanelActions,
+    scopeCanvas: HTMLCanvasElement | null = null,
   ) {
+    this.scopeCanvas = scopeCanvas;
     this.root = document.getElementById("panel")!;
     this.render();
   }
@@ -111,7 +132,11 @@ export class Panel {
 
       <section>
         <label class="lbl" for="circuit">Circuito</label>
-        <select id="circuit">${CIRCUITS.map((x) => `<option value="${x.id}" ${x.id === c.id ? "selected" : ""}>${x.name}</option>`).join("")}</select>
+        <select id="circuit">${GROUPS.map(
+          (g) => `<optgroup label="${g}">${CIRCUITS.filter((x) => x.group === g)
+            .map((x) => `<option value="${x.id}" ${x.id === c.id ? "selected" : ""}>${x.name}</option>`)
+            .join("")}</optgroup>`,
+        ).join("")}</select>
         <p class="desc">${c.description}</p>
         <div class="views">${Object.entries(VIEWS)
           .map(([k, v]) => `<button data-view="${k}">${v.name}</button>`)
@@ -152,11 +177,14 @@ export class Panel {
         </div>
         <button id="output" class="output">OUTPUT</button>
       </section>
+${c.gen ? this.genHtml() : ""}
+${this.scopeHtml()}
 
       <section>
         <h2>Componentes</h2>
         <div id="resistors"></div>
         <div id="diodes"></div>
+        <div id="caps"></div>
         <h3>Puentes <small>(quitá uno para abrir el circuito y medir corriente en serie)</small></h3>
         <div class="jumpers" id="jumpers">${c.jumpers.map((j) => `<button data-jumper="${j.id}" style="--wire:${j.color}">${j.id}</button>`).join("")}</div>
       </section>
@@ -211,7 +239,7 @@ export class Panel {
       </section>`;
 
     const $ = (id: string) => this.root.querySelector<HTMLElement>(`#${id}`)!;
-    for (const id of ["hint", "dmmReadout", "psuReadout", "probeWhere", "fuses", "resistors", "diodes", "notes", "calcV", "calcI", "calcP", "theory", "output", "vset", "iset", "dial", "mute"]) this.els[id] = $(id);
+    for (const id of ["hint", "dmmReadout", "psuReadout", "probeWhere", "fuses", "resistors", "diodes", "caps", "notes", "calcV", "calcI", "calcP", "theory", "output", "vset", "iset", "dial", "mute", "scopeScreen", "scopeWhere", "scopeStatus"]) this.els[id] = $(id);
 
     $("circuit").addEventListener("change", (e) => this.act.loadCircuit((e.target as HTMLSelectElement).value));
     this.root.querySelectorAll<HTMLButtonElement>("[data-view]").forEach((btn) => btn.addEventListener("click", () => this.act.view(btn.dataset.view!)));
@@ -254,11 +282,250 @@ export class Panel {
       ivAdd.addEventListener("click", () => this.addIvPoint());
     }
 
+    this.bindGen();
+    this.bindScope();
     this.renderResistors();
     this.renderDiodes();
+    this.renderCaps();
     this.renderNotes();
     this.renderIv();
     this.update();
+  }
+
+  // ---------------------------------------------------------------- generador
+
+  private genHtml(): string {
+    return `
+      <section>
+        <h2>Generador de funciones</h2>
+        <div class="readout gen" id="genReadout">—</div>
+        <div class="seg wave" id="genWave">${WAVES.map((w) => `<button data-wave="${w}">${WAVE_LABEL[w]}</button>`).join("")}</div>
+        <div class="row three">
+          <label>Frecuencia <input id="genFreq" type="number" min="0.1" max="20000" step="any"> Hz</label>
+          <label>Amplitud <input id="genVpp" type="number" min="0.002" max="20" step="0.1"> Vpp</label>
+          <label>Offset <input id="genOff" type="number" min="-10" max="10" step="0.1"> V</label>
+        </div>
+        <button id="genOutput" class="output">OUTPUT</button>
+        <p class="small muted">Salida de 50 Ω; la amplitud es la de circuito abierto. La masa del BNC va a la tierra del enchufe, igual que la del osciloscopio.</p>
+      </section>`;
+  }
+
+  private bindGen(): void {
+    const r = this.root;
+    for (const id of ["genReadout", "genFreq", "genVpp", "genOff", "genOutput"]) {
+      const el = r.querySelector<HTMLElement>(`#${id}`);
+      if (el) this.els[id] = el;
+      else delete this.els[id];
+    }
+    if (!this.els.genOutput) return;
+    r.querySelectorAll<HTMLButtonElement>("[data-wave]").forEach((b) => b.addEventListener("click", () => this.act.setGen({ wave: b.dataset.wave as Wave })));
+    const num = (id: string, key: "freq" | "vpp" | "offset") =>
+      this.els[id].addEventListener("change", () => {
+        const v = Number((this.els[id] as HTMLInputElement).value);
+        if (isFinite(v)) this.act.setGen({ [key]: v });
+      });
+    num("genFreq", "freq");
+    num("genVpp", "vpp");
+    num("genOff", "offset");
+    this.els.genOutput.addEventListener("click", () => this.act.setGen({ output: !this.bench.gen.output }));
+  }
+
+  // ---------------------------------------------------------------- osciloscopio
+
+  private scopeHtml(): string {
+    const vdivOpts = VDIVS.map((v) => `<option value="${v}">${fmtDiv(v, "V")}/div</option>`).join("");
+    const chRow = (c: 0 | 1) => `
+        <div class="sc-ch ch${c + 1}">
+          <button class="chbtn" data-ch="${c}">CH${c + 1}</button>
+          <select data-vdiv="${c}" aria-label="Escala vertical CH${c + 1}">${vdivOpts}</select>
+          <span class="nudge"><button data-pos="${c}" data-d="1" title="Subir la traza">▲</button><button data-pos="${c}" data-d="-1" title="Bajar la traza">▼</button></span>
+          <div class="seg mini">${(["DC", "AC", "GND"] as const).map((k) => `<button data-cpl="${c}" data-v="${k}">${k}</button>`).join("")}</div>
+        </div>`;
+    return `
+      <section class="scope-sec">
+        <h2>Osciloscopio</h2>
+        <div class="scope-screen" id="scopeScreen"></div>
+        <div class="row buttons sc-top">
+          <button data-sc="run" class="run">RUN / STOP</button><button data-sc="single">SINGLE</button><button data-sc="autoset" class="select">AUTOSET</button>
+        </div>
+        ${chRow(0)}${chRow(1)}
+        <div class="sc-row">
+          <label class="lbl">Horizontal</label>
+          <select id="scTdiv" aria-label="Base de tiempo">${TDIVS.map((t) => `<option value="${t}">${fmtDiv(t, "s")}/div</option>`).join("")}</select>
+          <span class="nudge"><button data-hpos="-1" title="Mover a la izquierda">◀</button><button data-hpos="1" title="Mover a la derecha">▶</button></span>
+        </div>
+        <div class="sc-row">
+          <label class="lbl">Disparo</label>
+          <div class="seg mini" id="scTsrc"><button data-tsrc="0">CH1</button><button data-tsrc="1">CH2</button></div>
+          <div class="seg mini" id="scSlope"><button data-slope="rise" title="Flanco de subida">↗</button><button data-slope="fall" title="Flanco de bajada">↘</button></div>
+          <span class="nudge"><button data-lvl="1" title="Subir el nivel">▲</button><button data-lvl="-1" title="Bajar el nivel">▼</button></span>
+          <div class="seg mini" id="scTmode">${(["AUTO", "NORMAL", "SINGLE"] as const).map((m) => `<button data-tmode="${m}">${m === "NORMAL" ? "NORM" : m}</button>`).join("")}</div>
+        </div>
+        <div class="sc-row">
+          <label class="lbl">Cursores</label>
+          <div class="seg mini" id="scCur"><button data-cur="off">No</button><button data-cur="time">Tiempo</button><button data-cur="volt">Tensión</button></div>
+          <div class="seg mini" id="scCurCh"><button data-curch="0">CH1</button><button data-curch="1">CH2</button></div>
+          <label class="check inline"><input type="checkbox" id="scMeas"> Mediciones</label>
+        </div>
+        <p class="small muted" id="scopeStatus"></p>
+        <div class="row probes three">
+          <button data-probe="ch1" class="probe ch1">Punta CH1</button>
+          <button data-probe="ch2" class="probe ch2">Punta CH2</button>
+          <button data-probe="sgnd" class="probe sgnd">Pinza de masa</button>
+        </div>
+        <div class="row small" id="scopeWhere"></div>
+      </section>`;
+  }
+
+  private bindScope(): void {
+    const r = this.root;
+    const S = (fn: (s: Oscilloscope) => void) => this.act.scope(fn);
+    r.querySelectorAll<HTMLButtonElement>("[data-sc]").forEach((b) =>
+      b.addEventListener("click", () =>
+        S((s) => {
+          if (b.dataset.sc === "run") s.toggleRun();
+          else if (b.dataset.sc === "single") s.single();
+          else s.autoset();
+        }),
+      ),
+    );
+    r.querySelectorAll<HTMLButtonElement>("[data-ch]").forEach((b) => b.addEventListener("click", () => S((s) => (s.ch[+b.dataset.ch!].on = !s.ch[+b.dataset.ch!].on))));
+    r.querySelectorAll<HTMLSelectElement>("[data-vdiv]").forEach((sel) =>
+      sel.addEventListener("change", () =>
+        S((s) => {
+          const c = +sel.dataset.vdiv! as 0 | 1;
+          const old = s.ch[c].vdiv;
+          s.ch[c].vdiv = Number(sel.value);
+          s.ch[c].pos = Math.max(-4, Math.min(4, (s.ch[c].pos * old) / s.ch[c].vdiv));
+        }),
+      ),
+    );
+    r.querySelectorAll<HTMLButtonElement>("[data-pos]").forEach((b) =>
+      b.addEventListener("click", () => S((s) => (s.ch[+b.dataset.pos!].pos = Math.max(-4, Math.min(4, Math.round((s.ch[+b.dataset.pos!].pos + 0.5 * +b.dataset.d!) * 10) / 10))))),
+    );
+    r.querySelectorAll<HTMLButtonElement>("[data-cpl]").forEach((b) => b.addEventListener("click", () => S((s) => (s.ch[+b.dataset.cpl!].coupling = b.dataset.v as "DC"))));
+    r.querySelector<HTMLSelectElement>("#scTdiv")!.addEventListener("change", (e) => S((s) => s.setTdiv(Number((e.target as HTMLSelectElement).value))));
+    r.querySelectorAll<HTMLButtonElement>("[data-hpos]").forEach((b) =>
+      b.addEventListener("click", () => S((s) => (s.hpos = Math.max(-5 * s.tdiv, Math.min(5 * s.tdiv, s.hpos - 0.5 * s.tdiv * +b.dataset.hpos!))))),
+    );
+    r.querySelectorAll<HTMLButtonElement>("[data-tsrc]").forEach((b) => b.addEventListener("click", () => S((s) => (s.trig.src = +b.dataset.tsrc! as 0 | 1))));
+    r.querySelectorAll<HTMLButtonElement>("[data-slope]").forEach((b) => b.addEventListener("click", () => S((s) => (s.trig.slope = b.dataset.slope as "rise"))));
+    r.querySelectorAll<HTMLButtonElement>("[data-lvl]").forEach((b) => b.addEventListener("click", () => S((s) => (s.trig.level = Math.round((s.trig.level + 0.2 * s.ch[s.trig.src].vdiv * +b.dataset.lvl!) * 1000) / 1000))));
+    r.querySelectorAll<HTMLButtonElement>("[data-tmode]").forEach((b) =>
+      b.addEventListener("click", () =>
+        S((s) => {
+          if (b.dataset.tmode === "SINGLE") s.single();
+          else {
+            s.trig.mode = b.dataset.tmode as "AUTO";
+            if (!s.running) s.toggleRun();
+          }
+        }),
+      ),
+    );
+    r.querySelectorAll<HTMLButtonElement>("[data-cur]").forEach((b) => b.addEventListener("click", () => S((s) => (s.cursor.mode = b.dataset.cur as "off"))));
+    r.querySelectorAll<HTMLButtonElement>("[data-curch]").forEach((b) => b.addEventListener("click", () => S((s) => (s.cursor.chan = +b.dataset.curch! as 0 | 1))));
+    const meas = r.querySelector<HTMLInputElement>("#scMeas")!;
+    meas.checked = this.bench.scope.measure;
+    meas.addEventListener("change", () => S((s) => (s.measure = meas.checked)));
+    this.mountScopeScreen();
+  }
+
+  /** Pone la pantalla del osciloscopio en el panel y permite arrastrar los cursores sobre ella. */
+  private mountScopeScreen(): void {
+    const slot = this.els.scopeScreen;
+    const cv = this.scopeCanvas;
+    if (!slot || !cv) return;
+    slot.appendChild(cv);
+    if (cv.dataset.bound) return;
+    cv.dataset.bound = "1";
+    const frac = (e: PointerEvent) => {
+      const b = cv.getBoundingClientRect();
+      const g = graticuleRect(cv.width, cv.height);
+      const px = ((e.clientX - b.left) / b.width) * cv.width;
+      const py = ((e.clientY - b.top) / b.height) * cv.height;
+      return { x: (px - g.x) / g.w, y: 1 - (py - g.y) / g.h };
+    };
+    cv.addEventListener("pointerdown", (e) => {
+      const s = this.bench.scope;
+      if (s.cursor.mode === "off") return;
+      const f = frac(e);
+      const v = s.cursor.mode === "time" ? f.x : f.y;
+      this.dragCursor = Math.abs(v - s.cursor.a) <= Math.abs(v - s.cursor.b) ? 0 : 1;
+      s.cursor.sel = this.dragCursor;
+      cv.setPointerCapture(e.pointerId);
+      this.moveCursor(f);
+      e.preventDefault();
+    });
+    cv.addEventListener("pointermove", (e) => {
+      if (this.dragCursor !== null) this.moveCursor(frac(e));
+    });
+    const end = () => (this.dragCursor = null);
+    cv.addEventListener("pointerup", end);
+    cv.addEventListener("pointercancel", end);
+  }
+
+  /** Mueve el cursor que se está arrastrando (fracción de la cuadrícula). */
+  moveCursor(f: { x: number; y: number }, which: 0 | 1 | null = this.dragCursor): void {
+    const s = this.bench.scope;
+    if (which === null || s.cursor.mode === "off") return;
+    const v = Math.max(0, Math.min(1, s.cursor.mode === "time" ? f.x : f.y));
+    if (which === 0) s.cursor.a = v;
+    else s.cursor.b = v;
+  }
+
+  private updateScope(): void {
+    const b = this.bench;
+    const s = b.scope;
+    const r = this.root;
+    const on = (sel: string, pred: (el: HTMLElement) => boolean) => r.querySelectorAll<HTMLElement>(sel).forEach((el) => el.classList.toggle("on", pred(el)));
+    on("[data-ch]", (el) => s.ch[+el.dataset.ch!].on);
+    on("[data-cpl]", (el) => s.ch[+el.dataset.cpl!].coupling === el.dataset.v);
+    on("[data-tsrc]", (el) => s.trig.src === +el.dataset.tsrc!);
+    on("[data-slope]", (el) => s.trig.slope === el.dataset.slope);
+    on("[data-tmode]", (el) => s.trig.mode === el.dataset.tmode);
+    on("[data-cur]", (el) => s.cursor.mode === el.dataset.cur);
+    on("[data-curch]", (el) => s.cursor.chan === +el.dataset.curch!);
+    r.querySelector<HTMLElement>('[data-sc="run"]')?.classList.toggle("stopped", !s.running);
+    r.querySelectorAll<HTMLSelectElement>("[data-vdiv]").forEach((sel) => {
+      const v = String(s.ch[+sel.dataset.vdiv!].vdiv);
+      if (document.activeElement !== sel && sel.value !== v) sel.value = v;
+    });
+    const td = r.querySelector<HTMLSelectElement>("#scTdiv");
+    if (td && document.activeElement !== td && td.value !== String(s.tdiv)) td.value = String(s.tdiv);
+    const meas = r.querySelector<HTMLInputElement>("#scMeas");
+    if (meas) meas.checked = s.measure;
+    const where = (p: ProbeId) => b.describeTarget(b.probes[p]);
+    this.els.scopeWhere.innerHTML = `<span class="dot ch1"></span> ${where("ch1")} &nbsp; <span class="dot ch2"></span> ${where("ch2")} &nbsp; <span class="dot sgnd"></span> masa: ${where("sgnd")}`;
+    const slow = b.speed < 0.95 ? ` · simulación en cámara lenta (×${b.speed.toFixed(2).replace(".", ",")}) para resolver la señal` : "";
+    const step = b.lastH > 0 ? `paso de simulación ${formatSI(b.lastH, "s", 2)}` : "circuito en continua";
+    this.els.scopeStatus.textContent = `${step}${slow}`;
+  }
+
+  // ---------------------------------------------------------------- capacitores
+
+  private renderCaps(): void {
+    const wrap = this.els.caps;
+    wrap.innerHTML = "";
+    for (const c of this.bench.circuit.capacitors ?? []) {
+      const part = this.bench.caps.get(c.id)!;
+      const row = h("div", { class: "part cap", "data-cid": c.id });
+      row.innerHTML = `
+        <div class="rhead"><b>${c.id}</b><span class="csym ${part.polarized ? "elec" : ""}" title="${part.polarized ? "Electrolítico" : "Cerámico"}"></span><span class="small" data-where></span><span class="rstate" data-state></span></div>
+        <div class="dctl">
+          <select data-k="nominal">${CAP_VALUES.map((v) => `<option value="${v}" ${Math.abs(v - part.nominal) < v * 1e-6 ? "selected" : ""}>${formatCap(v)} · ${kindOf(v) === "ceramico" ? "cerámico" : "electrolítico"}</option>`).join("")}</select>
+          ${part.polarized ? `<button class="ghost small" data-flip>Dar vuelta</button>` : ""}
+        </div>
+        <div class="rinfo"><span data-temp></span><span><button class="ghost small" data-dis title="Un corto con el destornillador">Descargar</button> <button class="ghost small" data-replace>Reemplazar</button></span></div>`;
+      row.querySelector("select")!.addEventListener("change", (e) => {
+        this.act.setCap(c.id, Number((e.target as HTMLSelectElement).value));
+        this.renderCaps();
+      });
+      row.querySelector("[data-flip]")?.addEventListener("click", () => this.act.flipCap(c.id));
+      row.querySelector("[data-dis]")!.addEventListener("click", () => this.act.dischargeCap(c.id));
+      row.querySelector("[data-replace]")!.addEventListener("click", () => this.act.replaceCap(c.id));
+      if (c.id === this.selectedPart) row.classList.add("selected");
+      wrap.appendChild(row);
+    }
   }
 
   private renderDiodes(): void {
@@ -327,7 +594,14 @@ export class Panel {
     this.selectedPart = id;
     this.renderResistors();
     this.renderDiodes();
-    this.root.querySelector(`.resistor[data-id="${id}"], .diode[data-did="${id}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    this.renderCaps();
+    this.root.querySelector(`.resistor[data-id="${id}"], .diode[data-did="${id}"], .cap[data-cid="${id}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+
+  /** Lleva el panel a la sección del osciloscopio o del generador. */
+  scrollTo(which: "scope" | "gen"): void {
+    const el = which === "scope" ? this.root.querySelector(".scope-sec") : this.els.genReadout?.closest("section");
+    el?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   syncPsuInputs(): void {
@@ -475,6 +749,14 @@ export class Panel {
       return;
     }
     const b = this.bench;
+    if (b.circuit.analysis) {
+      const rows = b
+        .analysis()
+        .map((r) => `<tr><td>${r.label}</td><td>${this.showTheory ? r.theory : ""}</td><td>${this.showTruth ? `<span class="truth">${r.real}</span>` : ""}</td></tr>`)
+        .join("");
+      el.innerHTML = `<table class="theory analysis"><thead><tr><th></th><th>${this.showTheory ? "teórico (nominal)" : ""}</th><th>${this.showTruth ? '<span class="truth">con los valores reales</span>' : ""}</th></tr></thead><tbody>${rows}</tbody></table>`;
+      return;
+    }
     const th = b.theory();
     const tr = b.truth();
     const rows = b.circuit.resistors
@@ -551,7 +833,7 @@ export class Panel {
       st.textContent = label;
       st.className = `rstate ${part.state === "ok" && part.drift <= 1.001 ? (part.tempC > 80 ? "warm" : "ok") : "bad"}`;
       // la potencia disipada solo se muestra con la solución visible (es lo que hay que medir)
-      const p = b.sol ? b.sol.pR(part.id) : 0;
+      const p = b.power.get(part.id) ?? 0;
       const extra = this.showTruth ? ` · disipa ${formatSI(p, "W", 3)} de ${POWER_LABEL[part.spec.power]}` : ` · máx. ${POWER_LABEL[part.spec.power]}`;
       row.querySelector<HTMLElement>("[data-temp]")!.textContent = `${part.tempC.toFixed(0)} °C${extra}`;
     });
@@ -569,6 +851,34 @@ export class Panel {
       const extra = this.showTruth ? ` · ${formatSI(part.current, "A", 3)} · ${formatSI(part.power, "W", 3)}` : "";
       row.querySelector<HTMLElement>("[data-temp]")!.textContent = `${part.tempC.toFixed(0)} °C · máx. ${formatSI(m.ifMax, "A")}${extra}`;
     });
+    this.root.querySelectorAll<HTMLElement>(".cap").forEach((row) => {
+      const part = b.caps.get(row.dataset.cid!);
+      if (!part) return;
+      const def = b.circuit.capacitors!.find((c) => c.id === part.id)!;
+      const holes = b.capHoles(def);
+      row.querySelector<HTMLElement>("[data-where]")!.textContent = part.polarized ? `+ en ${holes.p} · − en ${holes.n}` : `entre ${def.a} y ${def.b}`;
+      const st = row.querySelector<HTMLElement>("[data-state]")!;
+      st.textContent = part.state === "inflado" ? "INFLADO" : part.tempC > 85 ? "¡MUY CALIENTE!" : part.tempC > 45 ? "caliente" : part.reversed ? "al revés" : "ok";
+      st.className = `rstate ${part.state === "inflado" || part.tempC > 85 ? "bad" : part.tempC > 45 || part.reversed ? "warm" : "ok"}`;
+      const extra = this.showTruth ? ` · ${formatCap(part.farads)} reales · ${formatSI(part.volts, "V", 3)}` : "";
+      row.querySelector<HTMLElement>("[data-temp]")!.textContent = `${part.tempC.toFixed(0)} °C · ${part.polarized ? `máx. ${part.model.vMax} V` : "50 V"}${extra}`;
+    });
+    if (this.els.genOutput) {
+      const g = b.gen;
+      this.els.genReadout.innerHTML = `<span class="w">${WAVE_LABEL[g.wave]}</span> <span class="mono f">${formatFreq(g.freq)}</span> <span class="mono">${formatSI(g.vpp, "Vpp", 3)}</span> <small>offset ${formatSI(g.offset, "V", 3)}</small>`;
+      this.root.querySelectorAll<HTMLElement>("[data-wave]").forEach((el) => el.classList.toggle("on", el.dataset.wave === g.wave));
+      for (const [id, val] of [
+        ["genFreq", String(g.freq)],
+        ["genVpp", String(g.vpp)],
+        ["genOff", String(g.offset)],
+      ] as const) {
+        const inp = this.els[id] as HTMLInputElement;
+        if (document.activeElement !== inp && inp.value !== val) inp.value = val;
+      }
+      this.els.genOutput.classList.toggle("on", g.output);
+      this.els.genOutput.textContent = g.output ? "OUTPUT: ENCENDIDA" : "OUTPUT: APAGADA";
+    }
+    this.updateScope();
     if (this.showTheory || this.showTruth) this.updateTheory();
   }
 }

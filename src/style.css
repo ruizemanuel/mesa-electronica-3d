@@ -669,6 +669,157 @@ table.theory td span {
   }
 }
 
+/* ---------------------------------------------------------------- generador y osciloscopio */
+.readout.gen {
+  font-size: 17px;
+  color: #ffd7a0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+}
+.readout.gen .w {
+  font-family: "Inter", sans-serif;
+  font-weight: 700;
+  font-size: 14px;
+  color: #f0b429;
+}
+.readout.gen .f {
+  color: #fff1d6;
+}
+.seg.wave {
+  margin: 8px 0;
+}
+.row.three {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+.row.three label {
+  font-size: 11.5px;
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.row.three input[type="number"] {
+  width: 100%;
+}
+.row.probes.three {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+.probe.ch1 {
+  border-color: #b49a14;
+}
+.probe.ch2 {
+  border-color: #1b98b3;
+}
+.probe.sgnd {
+  border-color: #555b63;
+}
+.dot.ch1 {
+  background: #f2d21b;
+}
+.dot.ch2 {
+  background: #27d3f5;
+}
+.dot.sgnd {
+  background: #1b1b1b;
+  border: 1px solid #777;
+}
+.scope-screen {
+  margin: 0 0 10px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: #050607;
+  line-height: 0;
+}
+.scope-screen canvas {
+  width: 100%;
+  height: auto;
+  display: block;
+  touch-action: none;
+}
+.sc-top button.run.stopped {
+  background: #3a1715;
+  border-color: var(--red);
+  color: #ffc9c4;
+}
+.sc-ch,
+.sc-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0;
+  flex-wrap: wrap;
+}
+.sc-row .lbl {
+  width: 100%;
+  margin: 4px 0 0;
+}
+.sc-ch select,
+.sc-row select {
+  width: auto;
+  flex: 1;
+  min-width: 96px;
+  padding: 5px 7px;
+}
+.chbtn {
+  font-weight: 800;
+  min-width: 52px;
+  opacity: 0.55;
+}
+.ch1 .chbtn.on {
+  background: #3b3409;
+  border-color: #f2d21b;
+  color: #ffe866;
+  opacity: 1;
+}
+.ch2 .chbtn.on {
+  background: #0b3340;
+  border-color: #27d3f5;
+  color: #8eecff;
+  opacity: 1;
+}
+.nudge {
+  display: inline-flex;
+}
+.nudge button {
+  padding: 4px 8px;
+  border-radius: 0;
+  font-size: 11px;
+}
+.nudge button:first-child {
+  border-radius: 7px 0 0 7px;
+}
+.nudge button:last-child {
+  border-radius: 0 7px 7px 0;
+  border-left: none;
+}
+.seg.mini button {
+  padding: 4px 8px;
+  font-size: 11.5px;
+}
+.check.inline {
+  display: inline-flex;
+  margin: 0 0 0 auto;
+}
+.csym {
+  width: 18px;
+  height: 12px;
+  border-radius: 3px;
+  background: #d9822b;
+}
+.csym.elec {
+  background: linear-gradient(90deg, #1f3f8f 70%, #c7ccd6 70%);
+}
+table.analysis td:first-child {
+  color: var(--muted);
+}
+
 /* mira para apuntar las puntas con el dedo (va por encima del dedo, que tapa el agujero) */
 .aim {
   position: fixed;

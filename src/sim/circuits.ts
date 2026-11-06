@@ -1,5 +1,7 @@
 import type { DiodeType } from "./diode";
+import type { Wave } from "./fgen";
 import type { ResistorSpec } from "./resistor";
+import type { Coupling, Slope } from "./scope";
 
 /**
  * Protoboard de 400 puntos: 30 columnas, filas a–e (mitad superior) y f–j (mitad inferior),
@@ -58,14 +60,49 @@ export interface JumperDef {
   /** Puesto al cargar el circuito (por defecto sí). */
   present?: boolean;
 }
+export interface CapacitorDef {
+  id: string;
+  /** Agujero de la pata + (o de una de las patas, si no es polarizado) y de la pata −. */
+  a: string;
+  b: string;
+  nominal: number;
+}
+/** Dónde quedan las pinzas del cable del generador y cómo arranca configurado. */
+export interface GenDef {
+  pos: string;
+  neg: string;
+  wave: Wave;
+  freq: number;
+  vpp: number;
+  offset: number;
+}
+/** Puntas del osciloscopio ya colocadas y ajustes con los que arranca (como lo dejaría un ayudante). */
+export interface ScopeDef {
+  ch1?: string;
+  ch2?: string;
+  gnd?: string;
+  tdiv: number;
+  hpos?: number;
+  ch: [{ vdiv: number; pos: number; on?: boolean; coupling?: Coupling }, { vdiv: number; pos: number; on?: boolean; coupling?: Coupling }];
+  trig: { src: 0 | 1; level: number; slope?: Slope };
+}
+export type CircuitGroup = "Resistores" | "Diodos y LED" | "Capacitores y señales";
+export type Analysis = "rc" | "lowpass" | "rectifier";
+
 export interface CircuitDef {
   id: string;
   name: string;
+  group: CircuitGroup;
   description: string;
   vset: number;
   iset: number;
   resistors: ResistorDef[];
   diodes?: DiodeDef[];
+  capacitors?: CapacitorDef[];
+  gen?: GenDef;
+  scope?: ScopeDef;
+  /** Cálculos teóricos que muestra el panel para los circuitos con capacitores. */
+  analysis?: Analysis;
   jumpers: JumperDef[];
   tasks: string[];
 }
@@ -89,6 +126,7 @@ export const WIRE = {
 export const CIRCUITS: CircuitDef[] = [
   {
     id: "ohm",
+    group: "Resistores",
     name: "Ley de Ohm: un resistor",
     description: "Una resistencia conectada a la fuente. Medí V, I y calculá P = V·I.",
     vset: 5,
@@ -107,6 +145,7 @@ export const CIRCUITS: CircuitDef[] = [
   },
   {
     id: "serie",
+    group: "Resistores",
     name: "Serie: divisor de tensión",
     description: "Tres resistencias en serie. La corriente es la misma en todo el lazo y las tensiones se reparten.",
     vset: 10,
@@ -129,6 +168,7 @@ export const CIRCUITS: CircuitDef[] = [
   },
   {
     id: "paralelo",
+    group: "Resistores",
     name: "Paralelo",
     description: "Tres resistencias en paralelo. La tensión es la misma y las corrientes se suman.",
     vset: 5,
@@ -155,6 +195,7 @@ export const CIRCUITS: CircuitDef[] = [
   },
   {
     id: "mixto",
+    group: "Resistores",
     name: "Mixto: serie-paralelo",
     description: "R1 en serie con el paralelo de R2 y R3.",
     vset: 9,
@@ -179,6 +220,7 @@ export const CIRCUITS: CircuitDef[] = [
   },
   {
     id: "carga",
+    group: "Resistores",
     name: "Efecto de carga del voltímetro",
     description: "Divisor con resistencias de 4,7 MΩ: la impedancia de entrada del multímetro (10 MΩ) altera la medición.",
     vset: 10,
@@ -199,6 +241,7 @@ export const CIRCUITS: CircuitDef[] = [
   },
   {
     id: "led",
+    group: "Diodos y LED",
     name: "LED con resistencia limitadora",
     description: "Un LED rojo con su resistencia en serie. La resistencia fija la corriente: I = (V − Vf) / R.",
     vset: 5,
@@ -222,6 +265,7 @@ export const CIRCUITS: CircuitDef[] = [
   },
   {
     id: "diodo",
+    group: "Diodos y LED",
     name: "Diodo: directa e inversa",
     description: "Un 1N4007 en serie con 1 kΩ. En directa conduce con ≈ 0,6 V de caída; en inversa bloquea.",
     vset: 5,
@@ -242,6 +286,7 @@ export const CIRCUITS: CircuitDef[] = [
   },
   {
     id: "curva",
+    group: "Diodos y LED",
     name: "Curva I-V de un LED",
     description: "LED con 100 Ω (±1 %) en serie para medir la corriente. Variá la tensión de la fuente y armá la curva punto por punto.",
     vset: 1,
@@ -259,6 +304,112 @@ export const CIRCUITS: CircuitDef[] = [
       "En «Curva I-V» (cuaderno) elegí Vd y V_R: la corriente sale de I = V_R / R. Agregá el punto.",
       "Repetí con la fuente en 0,5 · 1 · 1,5 · 1,7 · 1,8 · 2 · 2,5 · 3 · 4 · 5 V. Casi no hay corriente hasta ≈ 1,6 V y después sube de golpe: es el codo del diodo.",
       "Cambiá el LED por otro color o por el 1N4007 y compará dónde está el codo. También podés medir la corriente directo en serie, con la borna mA, quitando J1.",
+    ],
+  },
+  {
+    id: "rectificador",
+    group: "Diodos y LED",
+    name: "Rectificador de media onda con filtro",
+    description:
+      "El generador hace de transformador (senoidal de 50 Hz, ±10 V). El 1N4007 deja pasar solo los semiciclos positivos y el electrolítico de 47 µF los «rellena»: queda una continua con ripple.",
+    vset: 5,
+    iset: 0.1,
+    resistors: [{ id: "R1", a: "12f", b: "18f", spec: q(4700) }],
+    diodes: [{ id: "D1", a: "12d", k: "12g", type: "1N4007" }],
+    capacitors: [{ id: "C1", a: "12i", b: "13i", nominal: 47e-6 }],
+    gen: { pos: "12a", neg: "RB-:28", wave: "sine", freq: 50, vpp: 20, offset: 0 },
+    scope: {
+      ch1: "12b",
+      ch2: "12h",
+      gnd: "RB-:24",
+      tdiv: 5e-3,
+      hpos: 0,
+      ch: [
+        { vdiv: 5, pos: 0 },
+        { vdiv: 5, pos: 0 },
+      ],
+      trig: { src: 0, level: 0 },
+    },
+    analysis: "rectifier",
+    jumpers: [
+      { id: "J1", a: "13j", b: "RB-:14", color: WIRE.black, arc: 1 },
+      { id: "J2", a: "18j", b: "RB-:18", color: WIRE.black },
+    ],
+    tasks: [
+      "Encendé la salida del generador (OUTPUT). En el osciloscopio, CH1 (amarillo) es la senoidal de entrada y CH2 (celeste) la salida sobre R1.",
+      "Quitá el puente J1: el capacitor queda desconectado y ves la media onda pura. La salida llega a ≈ 0,7 V menos que el pico de entrada (la caída del diodo) y vale cero en los semiciclos negativos.",
+      "Volvé a poner J1: el capacitor se carga en cada pico y se descarga por R1 el resto del ciclo. Medí el ripple: CH2 en acoplamiento AC y 0,2 V/div. Teoría: ΔV ≈ I / (f·C) = (≈ 8,7 V / 4,7 kΩ) / (50 Hz · 47 µF) ≈ 0,8 V.",
+      "El ripple medido da ≈ 20 % menos: la fórmula supone que el capacitor se descarga durante el período entero, pero en realidad se vuelve a cargar un poco antes del pico. Es una cota, útil para elegir C.",
+      "Cambiá C1 por 10 µF o por 470 µF en el panel y compará el ripple. Bajá R1 a 1 kΩ (más carga): el ripple crece.",
+      "Con el multímetro en V⎓ sobre la salida leés el promedio; en V~, el valor eficaz del ripple. Probá dar vuelta el electrolítico (botón del panel): al revés conduce como un diodo, el filtro deja de funcionar y se calienta. Con una fuente que entregue más corriente se inflaría: no lo hagas con uno de verdad.",
+      "Mirá CH1 con y sin el capacitor: con el capacitor, la senoidal se aplana en los picos. Son los pulsos de corriente de carga cayendo en los 50 Ω de salida del generador.",
+    ],
+  },
+  {
+    id: "rc",
+    group: "Capacitores y señales",
+    name: "Carga y descarga RC",
+    description:
+      "Una cuadrada de 0 a 5 V carga y descarga un capacitor de 100 nF a través de 10 kΩ. La constante de tiempo τ = R·C = 1 ms es lo que tarda en llegar al 63,2 % del salto.",
+    vset: 5,
+    iset: 0.1,
+    resistors: [{ id: "R1", a: "8d", b: "14d", spec: q(10000) }],
+    capacitors: [{ id: "C1", a: "14e", b: "14f", nominal: 100e-9 }],
+    gen: { pos: "8b", neg: "RB-:28", wave: "square", freq: 100, vpp: 5, offset: 2.5 },
+    scope: {
+      ch1: "8a",
+      ch2: "14a",
+      gnd: "RB-:20",
+      tdiv: 1e-3,
+      hpos: 4e-3,
+      ch: [
+        { vdiv: 1, pos: -2.5 },
+        { vdiv: 1, pos: -2.5 },
+      ],
+      trig: { src: 0, level: 2.5 },
+    },
+    analysis: "rc",
+    jumpers: [{ id: "J1", a: "14j", b: "RB-:14", color: WIRE.black }],
+    tasks: [
+      "Encendé la salida del generador (OUTPUT). CH1 (amarillo) es la cuadrada de entrada y CH2 (celeste) la tensión del capacitor: sube y baja como una exponencial.",
+      "Activá los cursores de tiempo (CURSOR): poné el A en el flanco de subida y mové el B hasta que CH2 marque 3,16 V (el 63,2 % de 5 V). El ΔT es la constante de tiempo: ≈ 1 ms.",
+      "Verificá que a los 5τ (5 ms) el capacitor está prácticamente cargado (99,3 %). Por eso con 100 Hz (5 ms por semiciclo) llega justo.",
+      "Cambiá R1 o C1 en el panel y volvé a medir τ. Subí la frecuencia a 1 kHz: ya no le da el tiempo de cargarse y la salida se vuelve un triángulo chiquito alrededor de 2,5 V.",
+      "Con el multímetro en V⎓ sobre el capacitor leés el promedio (≈ 2,5 V): el instrumento integra durante ≈ 0,3 s y no ve las subidas y bajadas.",
+    ],
+  },
+  {
+    id: "pasabajos",
+    group: "Capacitores y señales",
+    name: "Filtro RC pasabajos",
+    description:
+      "R = 1 kΩ y C = 100 nF: deja pasar las frecuencias bajas y atenúa las altas. En la frecuencia de corte fc = 1/(2πRC) ≈ 1,59 kHz la salida cae al 70,7 % y atrasa 45°.",
+    vset: 5,
+    iset: 0.1,
+    resistors: [{ id: "R1", a: "8d", b: "14d", spec: q(1000) }],
+    capacitors: [{ id: "C1", a: "14e", b: "14f", nominal: 100e-9 }],
+    gen: { pos: "8b", neg: "RB-:28", wave: "sine", freq: 200, vpp: 4, offset: 0 },
+    scope: {
+      ch1: "8a",
+      ch2: "14a",
+      gnd: "RB-:20",
+      tdiv: 1e-3,
+      hpos: 0,
+      ch: [
+        { vdiv: 1, pos: 0 },
+        { vdiv: 1, pos: 0 },
+      ],
+      trig: { src: 0, level: 0 },
+    },
+    analysis: "lowpass",
+    jumpers: [{ id: "J1", a: "14j", b: "RB-:14", color: WIRE.black }],
+    tasks: [
+      "Encendé la salida del generador. A 200 Hz la salida (CH2) es casi igual a la entrada (CH1): estamos en la banda de paso.",
+      "Subí la frecuencia hasta ≈ 1,5 kHz (perilla del generador o el panel) y usá AUTOSET. Buscá la frecuencia en la que Vpp de CH2 es el 70,7 % de la de CH1: es la frecuencia de corte.",
+      "Mirá el desfasaje que mide el osciloscopio (Fase): en fc es de −45°. También lo podés medir con cursores: Δt entre los cruces por cero × f × 360°.",
+      "Seguí subiendo: a 10 × fc la salida es ≈ 1/10 de la entrada (−20 dB por década) y atrasa casi 90°.",
+      "La fc medida da un poco menor que 1,59 kHz: la resistencia de salida del generador (50 Ω) queda en serie con R1. Calculá 1/(2π·1050 Ω·100 nF).",
+      "Probá con una cuadrada de 200 Hz y después de 5 kHz: el filtro redondea los flancos (se come los armónicos altos) y a 5 kHz queda casi un triángulo.",
     ],
   },
 ];
