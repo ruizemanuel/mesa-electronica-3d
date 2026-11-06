@@ -7,6 +7,9 @@ import { WAVES, WAVE_LABEL, formatFreq, type Wave } from "../sim/fgen";
 import { colorBands, eSeriesValues, formatSI, type PowerRating, type ResistorSpec } from "../sim/resistor";
 import { TDIVS, VDIVS, type Oscilloscope } from "../sim/scope";
 import { graticuleRect } from "./scopescreen";
+import { version } from "../../package.json";
+
+const REPO = "https://github.com/ruizemanuel/mesa-electronica-3d";
 import { VIEWS } from "../scene/world";
 import { IS_TOUCH } from "../input";
 import { DIODE_LABEL, IV_MAX_SERIES, ivChartSvg, ivLegend, ivSeries, type IvPoint } from "./ivcurve";
@@ -125,7 +128,7 @@ export class Panel {
       <header class="brand">
         <div>
           <h1>Mesa de electrónica</h1>
-          <p>Assets 3D: <a href="https://huggingface.co/datasets/nvidia/simready-assets" target="_blank" rel="noopener">NVIDIA SimReady</a> (CC-BY-4.0) · <a href="https://github.com/ruizemanuel/mesa-electronica-3d" target="_blank" rel="noopener">código en GitHub</a></p>
+          <p>Assets 3D: <a href="https://huggingface.co/datasets/nvidia/simready-assets" target="_blank" rel="noopener">NVIDIA SimReady</a> (CC-BY-4.0) · <a href="${REPO}" target="_blank" rel="noopener">código en GitHub</a> · <a href="${REPO}/releases" target="_blank" rel="noopener" title="Novedades de cada versión">v${version}</a></p>
         </div>
         <button class="icon" id="mute" title="Sonido">🔊</button>
       </header>

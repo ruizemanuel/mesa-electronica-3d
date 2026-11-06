@@ -1,7 +1,7 @@
 {
   "name": "simready-electronics-bench",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.4.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -14,6 +14,7 @@
     "record": "node tools/record-showcase.mjs",
     "record:preview": "node tools/record-showcase.mjs --preview",
     "record:led": "node tools/record-showcase.mjs --guion led",
+    "record:osc": "node tools/record-showcase.mjs --guion osciloscopio",
     "assets:optimize": "node tools/optimize_models.mjs"
   },
   "dependencies": {

@@ -505,7 +505,9 @@ export class Oscilloscope {
       if (s.period && trigCh === null) {
         trigCh = c;
         period = s.period;
-        this.trig.level = (s.max + s.min) / 2;
+        // redondeado a un nivel del conversor (si no, quedaría "0,13 nV" en vez de 0)
+        const q = ch.vdiv / ADC_PER_DIV;
+        this.trig.level = Math.round((s.max + s.min) / 2 / q) * q + 0;
       }
     }
     if (trigCh !== null && period) {

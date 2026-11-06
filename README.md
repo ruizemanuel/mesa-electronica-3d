@@ -1,6 +1,6 @@
 # Mesa de electrónica · SimReady
 
-**Demo: <https://mesa-electronica-3d.vercel.app>**
+**Demo: <https://mesa-electronica-3d.vercel.app>** · [Novedades de cada versión](https://github.com/ruizemanuel/mesa-electronica-3d/releases)
 
 Mesa de trabajo 3D en el navegador para practicar mediciones reales de **tensión, corriente, resistencia y potencia** con un multímetro digital y una fuente de laboratorio, y para ver **señales** con un **osciloscopio de 2 canales** y un **generador de funciones**, sobre circuitos armados en un protoboard: resistores, **diodos y LED**, **capacitores**.
 
@@ -50,6 +50,7 @@ pnpm dev                     # en otra terminal
 pnpm record                  # -> media/showcase.mp4
 pnpm record:preview          # cuadros sueltos en media/preview/ para revisar encuadres
 pnpm record:led              # -> media/led.mp4: clip de 11 s del LED que se quema sin resistencia
+pnpm record:osc              # -> media/osciloscopio.mp4: clip de 18 s del filtro RC con barrido de frecuencia
 node tools/record-showcase.mjs --url tu-dominio.app   # texto de la placa final
 ```
 

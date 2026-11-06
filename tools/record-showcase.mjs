@@ -4,6 +4,7 @@
  *   pnpm dev                                  # en otra terminal
  *   node tools/record-showcase.mjs            # -> media/showcase.mp4 (1920x1080, H.264)
  *   node tools/record-showcase.mjs --guion led   # -> media/led.mp4: clip corto del LED que se quema
+ *   node tools/record-showcase.mjs --guion osciloscopio   # -> media/osciloscopio.mp4: filtro RC con barrido de frecuencia
  *   node tools/record-showcase.mjs --preview  # cuadros sueltos en media/preview/ para revisar encuadres
  *   node tools/record-showcase.mjs --url github.com/usuario/repo   # texto de la placa final
  *
@@ -368,7 +369,62 @@ async function guionLed() {
   await hold(0.5);
 }
 
-const GUIONES = { showcase: guionShowcase, led: guionLed };
+/**
+ * Clip corto (~16 s): filtro RC pasabajos con una cuadrada. Se enciende el generador, el osciloscopio
+ * muestra la salida redondeada, se sube la frecuencia con la perilla (la salida se achica y se vuelve
+ * un triángulo) y AUTOSET acomoda las escalas.
+ */
+async function guionOsciloscopio() {
+  const gen = await ev(() => window.__capture.facing("fgen:body", 0.36, 0.06, 0.0));
+  const scope = await ev(() => window.__capture.facing("scope:screen", 0.235, 0.02, 0.0));
+  // el frente entero (con los botones de la derecha, que desde la toma de la pantalla quedan detrás del panel)
+  const scopeWide = await ev(() => window.__capture.facing("scope:body", 0.43, 0.05, 0.0));
+  // alta y atrás: entran la pantalla del osciloscopio y la perilla del generador (el panel ocupa la derecha)
+  const both = { pos: [0.215, 1.03, 0.6], target: [0.2, 0.735, -0.1] };
+  const end = { pos: [0.06, 1.06, 0.86], target: [0.05, 0.71, 0.0] };
+  await loadCircuit("pasabajos");
+  await ev(() => {
+    const g = window.__capture.bench.gen;
+    g.setWave("square");
+    g.setFreq(200);
+  });
+  mouse = [VIEW.width * 0.32, VIEW.height * 0.8];
+  await warmup(gen);
+
+  mark("generador");
+  await caption("Nuevo: osciloscopio y generador de funciones", "Filtro RC pasabajos · 1 kΩ y 100 nF · cuadrada de 200 Hz");
+  await hold(0.6);
+  await clickOn("fgen:btn:OUTPUT", 0.9, 0.5);
+
+  mark("osciloscopio");
+  await camTo(scope, 1.6, { mouseTo: [VIEW.width * 0.06, VIEW.height * 0.9] });
+  await caption("CH1: la cuadrada · CH2: la salida del filtro", "El capacitor redondea los flancos: se carga y descarga con τ = RC");
+  await hold(2.2);
+
+  mark("barrido");
+  await caption("Subiendo la frecuencia", "La salida se achica, se atrasa y se vuelve un triángulo");
+  await camTo(both, 1.4, { mouseTo: "fgen:knob" });
+  await wheel("fgen:knob", 12, { shift: true, every: 10 });
+  await hold(0.4);
+  const f = await ev(() => window.__capture.bench.gen.freq);
+  if (f < 4000) throw new Error(`La perilla no llegó a girar (el generador quedó en ${f} Hz): ¿la tapa algo desde esta toma?`);
+
+  mark("autoset");
+  await caption("AUTOSET", "Escalas y base de tiempo para la señal nueva (5 kHz)");
+  await camTo(scopeWide, 1.3, { mouseTo: "scope:btn:AUTO" });
+  await clickOn("scope:btn:AUTO", 0.3, 0.6);
+  if ((await ev(() => window.__capture.bench.scope.tdiv)) >= 1e-3) throw new Error("El clic no llegó al botón AUTOSET");
+  await camTo(scope, 1.3, { mouseTo: [VIEW.width * 0.06, VIEW.height * 0.9] });
+  await hold(1.2);
+
+  mark("final");
+  await caption(null);
+  await card("Mesa de electrónica 3D", `Osciloscopio, generador y capacitores, con física real<br><code>${LINK || "mesa-electronica-3d.vercel.app"}</code>`, "Nuevo");
+  await camTo(end, 2.4, { curve: (t) => t });
+  await hold(0.5);
+}
+
+const GUIONES = { showcase: guionShowcase, led: guionLed, osciloscopio: guionOsciloscopio };
 if (!GUIONES[GUION]) throw new Error(`Guion desconocido: ${GUION} (hay: ${Object.keys(GUIONES).join(", ")})`);
 await GUIONES[GUION]();
 
